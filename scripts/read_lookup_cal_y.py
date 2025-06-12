@@ -68,7 +68,7 @@ ws.ReadXML(
     ws.abs_lookup,
     os.path.join(
         os.getcwd(),
-        "data/lookup_table_perturb14_2025-03-13_11:29:32.528647.xml",
+        "data/lookup_tables/lookup_table_perturb14_2025-03-13_11:29:32.528647.xml",
     ),
 )
 
