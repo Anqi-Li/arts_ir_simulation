@@ -66,17 +66,16 @@ if __name__ == "__main__":
     h2o_perturbations = np.array([0.01, 0.05, 0.25, 0.5, 0.7, 0.9, 1, 1.1, 1.3, 1.8, 2, 4, 10, 16])
     t_perturbations = np.linspace(-150, 50, num=8)
 
-    # h2o_perturbations = np.array([0.01, 1, 4, 16])
-    # t_perturbations = np.linspace(-150, 50, num=4)
-
-    f_grid_kayser = np.linspace(800, 950, 500)  # Kayser cm-1
-    f_grid = pyarts.arts.convert.kaycm2freq(f_grid_kayser)  # Convert to Hz
+    # f_grid_kayser = np.linspace(800, 950, 500)  # Kayser cm-1
+    # f_grid = pyarts.arts.convert.kaycm2freq(f_grid_kayser)  # Convert to Hz
+    wavelen_grid = np.linspace(11.25e-6, 10.35e-6, 50)  # Wavelength in meters in descending order
+    f_grid = pyarts.arts.convert.wavelen2freq(wavelen_grid)  # Convert to Hz
     p_grid = np.logspace(np.log10(1050e2), np.log10(10e2), 150)  # Pa
     abs_species = [
         "H2O, H2O-SelfContCKDMT400 , H2O- ForeignContCKDMT400",
-        "O3",
+        # "O3",
         "CO2, CO2-CKDMT252",
-        "CH4",
+        # "CH4",
         "N2O",
     ]
     start = time.time()
@@ -86,13 +85,12 @@ if __name__ == "__main__":
         abs_species=abs_species,
         t_perturbations=t_perturbations,
         h2o_perturbations=h2o_perturbations,
-        filename="lookup_table_{}_{}.xml".format(
-            "perturb{}".format(len(h2o_perturbations)),
+        datapath='/home/anqil/arts_ir_simulation/data/lookup_tables',
+        filename="abs_table_{}_{}.xml".format(
+            "Earthcare_TIR2",
             current_time,
         ).replace(" ", "_"),
     )
     end = time.time()
     print(end - start, "s")
 
-# perturb4: 165.65641808509827 s
-# perturb14: 809.369692325592 s
