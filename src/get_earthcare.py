@@ -22,7 +22,7 @@ def prepare_arts(
         "specific_cloud_liquid_water_content",
         "specific_rain_water_content",
     ],
-    height_grid = np.arange(1e3, 20e3, 100),
+    height_grid=np.arange(0, 20e3, 100),
 ):
 
     # load CPR and MSI data
@@ -30,6 +30,8 @@ def prepare_arts(
         orbit_numbers=orbit_frame,
         msi_band=5,
         get_xmet=False,
+        add_dBZ=True,
+        remove_underground=True,
     )
 
     # load XMET data and align with CPR
@@ -66,9 +68,7 @@ def prepare_arts(
     # % filter bad pixels, cleary sky, etc.
     # mask clearsky profiles
     lowest_dBZ_threshold = -25
-    mask_clearsky = (
-        (da_dBZ_height < lowest_dBZ_threshold).all(dim="height_grid")
-    )
+    mask_clearsky = (da_dBZ_height < lowest_dBZ_threshold).all(dim="height_grid")
 
     # mask extreme MSI values
     mask_bad_msi = np.logical_or(
@@ -86,7 +86,10 @@ def prepare_arts(
         xds[["surfaceElevation", "pixel_values"]]
         .assign(
             dBZ=da_dBZ_height,
-            **{v: (da_dBZ_height.dims, ds_xmet_height[v].__array__()) for v in vars_xmet},
+            **{
+                v: (da_dBZ_height.dims, ds_xmet_height[v].__array__())
+                for v in vars_xmet
+            },
         )
         .where(mask.compute(), drop=True)
     )
@@ -98,12 +101,11 @@ def prepare_arts(
 # %%
 if __name__ == "__main__":
     # %%
-
     orbit_frame = "01162E"
     ds = prepare_arts(orbit_frame, remove_clearsky=False)
 
     # %% save ds to netcdf file
-    path_save = "../data/earthcare/xy_data/"
+    path_save = "../data/earthcare/arts_x_data/"
     ds.reset_index("nray").set_xindex("time").to_netcdf(
-        path_save + f"xy_{orbit_frame}.nc"
+        path_save + f"arts_x_{orbit_frame}.nc"
     )
