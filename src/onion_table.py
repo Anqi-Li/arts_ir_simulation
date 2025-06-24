@@ -63,7 +63,7 @@ def make_onion_invtable(habit, psd):
     ws.VectorCreate("onion_t_grid")
     #
     ws.VectorLinSpace(ws.onion_dbze_grid, -35, 20, 1)
-    ws.VectorLinSpace(ws.onion_t_grid, 200, 273, 1) #neglect temperatures above 0 C
+    ws.VectorLinSpace(ws.onion_t_grid, 180, 273, 1) #neglect temperatures above 0 C
     #
     ws.RadarOnionPeelingTableCalc(
         invtable=ws.onion_invtable,
@@ -103,7 +103,7 @@ def get_ds_table(habit, psd, ws):
 #%%
 if __name__ == "__main__":
     # %% Create the inversion table
-    habit = ["LargePlateAggregate", "8-ColumnAggregate"][1]  # Habit to use
+    habit = ["LargePlateAggregate", "8-ColumnAggregate"][0]  # Habit to use
     psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][0]  # PSD to use
 
     ws = make_onion_invtable(habit, psd)
@@ -149,16 +149,12 @@ if __name__ == "__main__":
         },
     )
     # %% take a sample earthcare dataset
-    path_earthcare = "~/earthcare/data/training_data/"
-    ds_earthcare = xr.open_dataset(path_earthcare + "training_data_04405A.nc")
-    ds_earthcare = (
-        ds_earthcare.set_xindex(["height_grid", "param"])
-        .unstack("features")
-        .x.to_dataset("param")
-    )
+    path_earthcare = "../data/earthcare/arts_x_data/"
+    ds_earthcare = xr.open_dataset(path_earthcare + "arts_x_01162E.nc")
+    
     # %% interpolate the table to the earthcare dataset
     profile_fwc_log10 = ds_table.sel(radiative_properties="FWC").interp(
-        Temperature=ds_earthcare.T,
+        Temperature=ds_earthcare.temperature,
         dBZ=ds_earthcare.dBZ,
     )
 
@@ -175,7 +171,7 @@ if __name__ == "__main__":
         ax=axes[1],
     )
 
-    ds_earthcare.T.where(ds_earthcare.T<273).plot(
+    ds_earthcare.temperature.where((ds_earthcare.temperature<273)&(ds_earthcare.temperature>180)).plot(
         x="nray",
         y="height_grid",
         ax=axes[2],
