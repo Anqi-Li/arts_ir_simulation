@@ -101,83 +101,65 @@ def get_ds_table(habit, psd, ws):
     return ds_table
 
 #%%
-if __name__ == "__main__":
-    # %% Create the inversion table
-    habit = ["LargePlateAggregate", "8-ColumnAggregate"][0]  # Habit to use
-    psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][0]  # PSD to use
-
-    ws = make_onion_invtable(habit, psd)
-
-    #% Print and plot table
-    # The table for FWC ends up in the array at position [1]
-    # The dimension "Radiative properties" consists of two values, FWC and Extinction.
-    # See documentation of particle_bulkpropRadarOnionPeeling for more details
-    #
-    print("Order of dimensions:")
-    print(ws.onion_invtable.value[1].gridnames)
-    #
+def plot_table(ds_table):
     plt.figure()
-    plt.plot(ws.onion_dbze_grid.value, ws.onion_invtable.value[1].data[0, :, 0])
-    plt.plot(ws.onion_dbze_grid.value, ws.onion_invtable.value[1].data[0, :, -1])
-    plt.xlabel("Reflectivity [dBZ]")
-    plt.ylabel("log10(FWC/[kg/m3])")
-    plt.title(f"Radar onion inversion table for {habit} with {psd} PSD")
-    plt.grid()
-    plt.legend([f"{ws.onion_t_grid.value[0]} K", f"{ws.onion_t_grid.value[-1]} K"])
-    # plt.show()
-
-
-    #%
-    ds_table = get_ds_table(habit, psd, ws)
     ds_table.sel(radiative_properties="FWC").isel(Temperature=[0,-1]).plot(
-        x="dBZ",
-        hue="Temperature",
-        label="log10(FWC) [kg/m3]",
-        ls='',
-        marker='.',
-    )
-    # plt.grid()
+                x="dBZ",
+                hue="Temperature",
+                label="log10(FWC) [kg/m3]",
+                ls='',
+                marker='.',
+            )
+    plt.grid()
     plt.show()
 
-    #% Save the table to a netCDF file
-    ds_table.to_netcdf(
-        f"../data/onion_invtables/onion_invtable_{habit}_{psd}.nc",
-        encoding={
-            "radiative_properties": {"dtype": "S1"},
-            "dBZ": {"dtype": "float32"},
-            "Temperature": {"dtype": "float32"},
-        },
-    )
+if __name__ == "__main__":
+    # %% Create the inversion table
+    for habit in ["LargePlateAggregate", "8-ColumnAggregate"]:  # Habit to use
+        for psd in ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"]:  # PSD to use
+            
+            # Create the inversion table
+            ws = make_onion_invtable(habit, psd)
+
+            #% Create the data array with the inversion table
+            ds_table = get_ds_table(habit, psd, ws)
+
+            # plot_table(ds_table)
+
+            #% Save the table to a netCDF file
+            ds_table.to_netcdf(
+                f"../data/onion_invtables/onion_invtable_{habit}_{psd}.nc",
+                encoding={
+                    "radiative_properties": {"dtype": "S1"},
+                    "dBZ": {"dtype": "float32"},
+                    "Temperature": {"dtype": "float32"},
+                },
+            )
     # %% take a sample earthcare dataset
-    path_earthcare = "../data/earthcare/arts_x_data/"
-    ds_earthcare = xr.open_dataset(path_earthcare + "arts_x_01162E.nc")
+    # path_earthcare = "../data/earthcare/arts_x_data/"
+    # ds_earthcare = xr.open_dataset(path_earthcare + "arts_x_01162E.nc")
     
     # %% interpolate the table to the earthcare dataset
-    profile_fwc_log10 = ds_table.sel(radiative_properties="FWC").interp(
-        Temperature=ds_earthcare.temperature,
-        dBZ=ds_earthcare.dBZ,
-    )
+    # profile_fwc_log10 = ds_table.sel(radiative_properties="FWC").interp(
+    #     Temperature=ds_earthcare.temperature,
+    #     dBZ=ds_earthcare.dBZ,
+    # )
 
-    fig, axes = plt.subplots(3,1, figsize=(12, 6), sharex=True, sharey=True)
-    profile_fwc_log10.plot(
-        x="nray",
-        y="height_grid",
-        ax=axes[0],
-    )
+    # fig, axes = plt.subplots(3,1, figsize=(12, 6), sharex=True, sharey=True)
+    # profile_fwc_log10.plot(
+    #     x="nray",
+    #     y="height_grid",
+    #     ax=axes[0],
+    # )
 
-    ds_earthcare.dBZ.plot(
-        x="nray",
-        y="height_grid",
-        ax=axes[1],
-    )
+    # ds_earthcare.dBZ.plot(
+    #     x="nray",
+    #     y="height_grid",
+    #     ax=axes[1],
+    # )
 
-    ds_earthcare.temperature.where((ds_earthcare.temperature<273)&(ds_earthcare.temperature>180)).plot(
-        x="nray",
-        y="height_grid",
-        ax=axes[2],
-    )
-    #%%
-    profile_fwc_log10.isel(nray=1100).pipe(lambda x: 10**x).assign_attrs(dict(units='kg/m3')).plot(
-        y="height_grid",
-        label="FWC [kg/m3]",
-    )
+    # ds_earthcare.temperature.where((ds_earthcare.temperature<273)&(ds_earthcare.temperature>180)).plot(
+    #     x="nray",
+    #     y="height_grid",
+    #     ax=axes[2],
+    # )
