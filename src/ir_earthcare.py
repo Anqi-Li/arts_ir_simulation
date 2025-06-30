@@ -1,4 +1,5 @@
 # %%
+from sys import argv
 import pyarts
 import numpy as np
 import os
@@ -11,7 +12,8 @@ from easy_arts.data_model import (
     CloudboxOption,
     SpectralRegion,
 )
-from physics.unitconv import specific_humidity2h2o_p
+from physics.unitconv import specific_humidity2h2o_p, mixing_ratio2mass_conc
+from physics.constants import DENSITY_H2O_LIQUID
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 
@@ -28,7 +30,7 @@ map_habit = {
 
 
 # %%
-def cal_y_arts(ds_earthcare, habit_std, psd, ds_onion_invtable):
+def cal_y_arts(ds_earthcare, habit_std, psd):
     # Create a workspace
     ws = ea.wsInit(SpectralRegion.TIR)
 
@@ -92,9 +94,9 @@ def cal_y_arts(ds_earthcare, habit_std, psd, ds_onion_invtable):
     )
 
     # Use the same absorption species and f_grid as in the lookup table
-    ws.f_gridFromGasAbsLookup()
-    # f_grid_abs_lookup = ws.abs_lookup.value.f_grid.value
-    # ws.f_grid = f_grid_abs_lookup[::5]  # use every 5th frequency point
+    # ws.f_gridFromGasAbsLookup()
+    f_grid_abs_lookup = ws.abs_lookup.value.f_grid.value
+    ws.f_grid = f_grid_abs_lookup[::5]  # use every 5th frequency point
     ws.abs_species = ws.abs_lookup.value.species
 
     # Compute the absorption agenda.
@@ -134,16 +136,13 @@ def cal_y_arts(ds_earthcare, habit_std, psd, ds_onion_invtable):
     return extract_xr_arrays(ds_earthcare, ws, scat_species)
 
 
-def insert_bulkprop_from_earthcare(
-    ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"]
-):
+def insert_bulkprop_from_earthcare(ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"]):
     for i, species in enumerate(scat_species):
         ws.Append(ws.particle_bulkprop_names, species)
 
         if species == "FWC":
             profile_fwc = ds_earthcare["frozen_water_content"].values
             wsv.particle_bulkprop_fieldInsert(ws, profile_fwc, i)
-
             ea.scat_data_rawAppendStdHabit(
                 ws,
                 habit=map_habit[habit_std],
@@ -164,25 +163,73 @@ def insert_bulkprop_from_earthcare(
                 raise ValueError(f"PSD {psd} not handled")
 
         elif species == "LWC":
-            # profile_lwc = ds_earthcare["cloud_liquid_water_content"].fillna(0).values
-            profile_lwc = (
-                ds_earthcare[["cloud_liquid_water_content", "rain_water_content"]]
-                .fillna(0)
-                .to_array()
-                .sum("variable")
-                .values
-            )
+            profile_lwc = ds_earthcare["cloud_liquid_water_content"].values
             wsv.particle_bulkprop_fieldInsert(ws, profile_lwc, i)
             ea.scat_data_rawAppendStdHabit(
                 ws,
                 habit="MieSpheres_H2O_liquid",
                 size_step=3,  # skip some particle sizes
-                dmax_end=50e-3,  # ignore larger particles
+                dmax_end=50e-6,  # ignore larger particles
             )
-            ea.scat_speciesMgdMass(ws, species)
 
+            coefs = convert_mgd_params_diameter2mass(**get_mgd_coefs(), remove_suffix=True)
+            ea.scat_speciesMgdMass(ws, species, n0=-999, **coefs, x_unit="dveq")
         else:
             raise ValueError(f"Scattering species {species} not handled")
+
+
+def get_mgd_coefs(remove_suffix=False):
+    """
+    Get the MGD coefficients for the parameters found in Tampieri & Tomasi (1975).
+    Returns:
+        mu_d (float): MGD mu parameter for diameter
+        la_d (float): MGD lambda parameter for diameter
+        ga_d (float): MGD gamma parameter for diameter
+    """
+    alpha = 5
+    gamma = 1.49
+    r_c = 8.81e-6  # m
+
+    # change notation to match petty and Huang (2011)
+    mu_r = alpha
+    ga_r = gamma
+    la_r = alpha / gamma / (r_c) ** (gamma)
+
+    # convert to diameter parameters described in Petty and Huang (2011)
+    mu_d = mu_r
+    ga_d = ga_r
+    la_d = la_r / 2**ga_d
+
+    coefs = {"mu_d": mu_d, "la_d": la_d, "ga_d": ga_d}
+    if remove_suffix:
+        coefs = {k.split("_")[0]: v for k, v in coefs.items()}
+    return coefs
+
+
+def convert_mgd_params_diameter2mass(mu_d, la_d, ga_d, remove_suffix=False):
+    """
+    Convert MGD parameters from diameter to mass,
+    based on analytical relations described in Petty and Huang (2011)
+    Args:
+        mu_d (float): MGD mu parameter for diameter
+        la_d (float): MGD lambda parameter for diameter
+        ga_d (float): MGD gamma parameter for diameter
+    Returns:
+        mu_m (float): MGD mu parameter for mass
+        la_m (float): MGD lambda parameter for mass
+        ga_m (float): MGD gamma parameter for mass
+    """
+
+    rho = DENSITY_H2O_LIQUID
+    a0 = np.pi * rho / 6
+    mu_m = (1 / 3) * (mu_d + 1) - 1
+    la_m = la_d * a0 ** (-ga_d / 3)
+    ga_m = ga_d / 3
+
+    coefs = {"mu_m": mu_m, "la_m": la_m, "ga_m": ga_m}
+    if remove_suffix:
+        coefs = {k.split("_")[0]: v for k, v in coefs.items()}
+    return coefs
 
 
 def insert_atm_from_earthcare(ds_earthcare, ws):
@@ -207,11 +254,7 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
 
     vmr_co2 = 427.53e-6 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
     vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
-    vmr_o3 = (
-        28.9644
-        / 47.9982
-        * ds_earthcare["ozone_mass_mixing_ratio"].data.reshape(-1, 1, 1)
-    )
+    vmr_o3 = 28.9644 / 47.9982 * ds_earthcare["ozone_mass_mixing_ratio"].data.reshape(-1, 1, 1)
     vmr_field_stack = []
     for s in ws.abs_species.value:
         s = str(s).split("-")[0]
@@ -233,9 +276,7 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
     da_y = xr.DataArray(
         name="IR Temperature",
         data=ws.y.value,
-        coords={
-            "f_grid": pyarts.arts.convert.freq2wavelen(ws.f_grid.value.value) * 1e6
-        },
+        coords={"f_grid": pyarts.arts.convert.freq2wavelen(ws.f_grid.value.value) * 1e6},
         attrs={
             "unit": "K",
             "long_name": "Brightness Temperature",
@@ -244,7 +285,6 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
 
     da_bulkprop_field = xr.DataArray(
         name="particle_bulkprob_field",
-        # data=profile_fwc,
         data=ws.particle_bulkprop_field.value.value.squeeze(),
         coords={
             "scat_species": scat_species,
@@ -252,7 +292,6 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
         },
         attrs={
             "unit": "kg m-3",
-            # "long_name": "frozen water content",
         },
     )
     da_vmr_field = xr.DataArray(
@@ -272,12 +311,9 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
     return da_y, da_bulkprop_field, da_vmr_field, da_auxiliary
 
 
-# %%
 def insert_fwc(ds_onion_invtable, ds_earthcare_):
     lowest_dBZ_threshold = -30
-    ds_earthcare_["dBZ"] = ds_earthcare_["dBZ"].where(
-        ds_earthcare_["dBZ"] >= lowest_dBZ_threshold
-    )
+    ds_earthcare_["dBZ"] = ds_earthcare_["dBZ"].where(ds_earthcare_["dBZ"] >= lowest_dBZ_threshold)
 
     profile_fwc = (
         ds_onion_invtable.sel(radiative_properties="FWC")
@@ -306,18 +342,34 @@ def insert_fwc(ds_onion_invtable, ds_earthcare_):
     return ds_earthcare_
 
 
+# %%
 if __name__ == "__main__":
+
+    # take system arguments to select habit, psd and orbit frame
+    if len(argv) == 3:
+        i = int(argv[1])
+        j = int(argv[2])
+        orbit_frame = "01162E"  # default orbit frame
+    elif len(argv) == 4:
+        i = int(argv[1])
+        j = int(argv[2])
+        orbit_frame = argv[3]
+    else:
+        i = 0
+        j = 0
+        orbit_frame = "01162E"  # default orbit frame
+        raise ValueError("Please provide habit and psd indices as command line arguments.")
+
     # %% Load Earthcare data
 
     # take a sample earthcare dataset
     path_earthcare = "../data/earthcare/arts_input_data/"
-    orbit_frame = "01162E"
+    # orbit_frame = "01162E"
     ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
-    ds_earthcare_ = ds_earthcare_.rename({"z": "height_grid"})
 
     # % choose invtable
-    habit_std = ["LargePlateAggregate", "8-ColumnAggregate"][1]  # Habit to use
-    psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][0]  # PSD to use
+    habit_std = ["LargePlateAggregate", "8-ColumnAggregate"][i]  # Habit to use
+    psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][j]  # PSD to use
     print(habit_std)
     print(psd)
 
@@ -333,23 +385,20 @@ if __name__ == "__main__":
 
     # remove clearsky profiles
     mask_low_fwc = (ds_earthcare_["frozen_water_content"] == 0).all(dim="height_grid")
-    # mask_low_lwc = (ds_earthcare_["cloud_liquid_water_content"] == 0).all(
-    #     dim="height_grid"
-    # )
-    # mask = np.logical_and(mask_low_fwc, mask_low_lwc)
+    mask_cold_clouds = ds_earthcare_["pixel_values"] < 245
 
-    ds_earthcare_subset = ds_earthcare_.where(~mask_low_fwc, drop=True).isel(
-        # nray=slice(None, None, 100)
+    ds_earthcare_subset = ds_earthcare_.where(mask_cold_clouds, drop=True).isel(
+        # nray=slice(None, None, 10),
     )
     print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
 
+    # %%
     # % loop over nrays
     def process_nray(i):
         return cal_y_arts(
             ds_earthcare_subset.isel(nray=i),
             habit_std,
             psd,
-            ds_onion_invtable,
         )
 
     y = []
@@ -357,13 +406,8 @@ if __name__ == "__main__":
     vmr = []
     auxiliary = []
 
-    with ProcessPoolExecutor(
-        max_workers=70
-    ) as executor:  # Limit to 4 workers, adjust as needed
-        futures = [
-            executor.submit(process_nray, i)
-            for i in range(len(ds_earthcare_subset.nray))
-        ]
+    with ProcessPoolExecutor(max_workers=64) as executor:
+        futures = [executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))]
         for f in tqdm(as_completed(futures), total=len(futures), desc="process nrays"):
             da_y, da_bulkprop, da_vmr, da_auxiliary = f.result()
             y.append(da_y)
@@ -386,95 +430,6 @@ if __name__ == "__main__":
         .assign(ds_earthcare_subset)
     )
 
-    # % save to file
-    ds_arts.to_netcdf(
-        f"../data/earthcare/arts_output_data/{habit_std}_{psd}_{orbit_frame}_allsky.nc"
-    )
-
-
-# %% read a file
-habit_std = "LargePlateAggregate"
-psd = "DelanoeEtAl14"
-orbit_frame = "01162E"
-ds_arts = xr.open_dataset(
-    f"../data/earthcare/arts_output_data/{habit_std}_{psd}_{orbit_frame}_allsky.nc"
-)
-# %%
-# plot the results
-fig, axes = plt.subplots(5, 1, sharex=True, figsize=(10, 8), constrained_layout=True)
-kwargs = dict(
-    y="height_grid",
-    x="nray",
-    add_colorbar=True,
-)
-ds_arts["dBZ"].where(ds_arts["dBZ"] > -30).plot(ax=axes[0], vmin=-30, vmax=30, **kwargs)
-
-ds_arts["bulkprop"].sel(scat_species="FWC").pipe(np.log10).plot(
-    ax=axes[1], vmin=-6, vmax=-3, **kwargs
-)
-ds_arts["bulkprop"].sel(scat_species="LWC").pipe(np.log10).plot(ax=axes[2], **kwargs)
-
-kwargs = dict(x="nray", marker=".", markersize=1, ax=axes[3])
-ds_arts["arts"].mean("f_grid").plot(label="arts", **kwargs)
-ds_arts["pixel_values"].plot(label="MSI", **kwargs)
-axes[3].legend()
-
-kwargs = dict(x="nray", marker=".", markersize=1, ax=axes[4])
-ds_arts[["pixel_values", "arts"]].to_array().diff("variable").mean("f_grid").plot(
-    **kwargs
-)
-axes[4].axhline(0, color="k", ls="--", lw=0.5)
-
-axes[0].set_title("dBZ")
-axes[1].set_title("FWC (log10)")
-axes[2].set_title("LWC (log10)")
-axes[3].set_title("Brightness Temperature (mean over f_grid)")
-axes[4].set_title("ARTS - MSI")
-axes[0].set_xlabel("")
-axes[1].set_xlabel("")
-axes[2].set_xlabel("")
-axes[3].set_xlabel("")
-
-fig.suptitle(
-    f"""{habit_std}
-{psd}
-{orbit_frame}
-    """,
-)
-
-# %%
-# %% Plotting
-# plt.figure()
-# ds_arts.bulkprop.plot(y="height_grid", hue="nray", col="scat_species", sharex=False, xscale="log")
-# plt.show()
-
-# plt.figure()
-# ds_arts.vmr.plot(y="height_grid", hue="nray", col="abs_species", sharex=False, xscale="log")
-# plt.show()
-
-# plt.figure()
-# kwargs = dict(marker=".")
-# ds_arts.arts.isel(f_grid=slice(None, None, 10)).mean("f_grid").plot(x="nray", label="arts 10th", **kwargs)
-# ds_arts.arts.isel(f_grid=slice(None, None, 5)).mean("f_grid").plot(x="nray", label="arts 5th", **kwargs)
-# ds_arts.arts.isel(f_grid=slice(None, None, 2)).mean("f_grid").plot(x="nray", label="arts 2th", **kwargs)
-# ds_arts.arts.mean("f_grid").plot(x="nray", label="arts", **kwargs)
-
-# ds_earthcare_subset["pixel_values"].plot(x="nray", label="MSI", **kwargs)
-# # ds_earthcare_subset["temperature"].max(dim="height_grid").plot(x="nray", label="max T", **kwargs)
-# ds_earthcare_subset.temperature.interp(
-#     height_grid=ds_earthcare_subset.surfaceElevation,
-#     kwargs={"fill_value": "extrapolate"},
-# ).plot(x="nray", label="surface T (interpolate?)", **kwargs)
-# plt.ylim([200, 302])
-# plt.legend()
-# plt.title(
-#     f"""
-# {habit_std}
-# {psd}
-# {orbit_frame}
-#           """
-# )
-# plt.show()
-
-# plt.figure()
-# ds_arts.arts.plot(y="f_grid", x="nray")
+    # %%
+    # %% save to file
+    ds_arts.to_netcdf(f"../data/earthcare/arts_output_data/cold_allsky_{habit_std}_{psd}_{orbit_frame}.nc")
