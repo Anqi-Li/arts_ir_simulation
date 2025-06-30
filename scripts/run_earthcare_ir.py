@@ -27,11 +27,17 @@ def run_earthcare_ir(orbit, i, j):
     subprocess.run(command, check=True)
 
 
+# %%
+orbit_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data/earthcare/arts_input_data")
+orbits = [o[-9:-3] for o in os.listdir(orbit_dir)]
+
 # %% Loop through the habit and psd indices
-orbit = "01162E"  # Default orbit frame
-for i in range(2):
-    for j in range(3):
-        print(f"Running EarthCARE IR for orbit {orbit}, habit {i} and psd {j}")
-        run_earthcare_ir(orbit, i, j)
-        print(f"Completed EarthCARE IR for orbit {orbit}, habit {i} and psd {j}")
+# orbit = "01162E"  # Default orbit frame
+for orbit in orbits:
+    print(f"Processing orbit: {orbit}")
+    for i in range(2):
+        for j in range(3):
+            print(f"Running EarthCARE IR for orbit {orbit}, habit {i} and psd {j}")
+            run_earthcare_ir(orbit, i, j)
+            print(f"Completed EarthCARE IR for orbit {orbit}, habit {i} and psd {j}")
 print("All EarthCARE IR processing completed.")

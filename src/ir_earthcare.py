@@ -1,5 +1,7 @@
 # %%
+from fileinput import filename
 from sys import argv
+import sys
 import pyarts
 import numpy as np
 import os
@@ -18,8 +20,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 
 path_abs_lookup_table = os.path.join(
-    os.getcwd(),
-    "../data/lookup_tables/abs_table_Earthcare_TIR2_2025-06-12_16:37:12.618561.xml",
+    os.path.dirname(os.path.dirname(__file__)),
+    "data/lookup_tables/abs_table_Earthcare_TIR2_2025-06-12_16:37:12.618561.xml",
 )
 
 # % map the standard habit to the Yang habit name
@@ -360,34 +362,50 @@ if __name__ == "__main__":
         orbit_frame = "01162E"  # default orbit frame
         raise ValueError("Please provide habit and psd indices as command line arguments.")
 
-    # %% Load Earthcare data
-
-    # take a sample earthcare dataset
-    path_earthcare = "../data/earthcare/arts_input_data/"
-    # orbit_frame = "01162E"
-    ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
-
     # % choose invtable
     habit_std = ["LargePlateAggregate", "8-ColumnAggregate"][i]  # Habit to use
     psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][j]  # PSD to use
     print(habit_std)
     print(psd)
 
+    file_save_ncdf = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        f"data/earthcare/arts_output_data/cold_allsky_{habit_std}_{psd}_{orbit_frame}.nc",
+    )
+    # check if the file already exists
+    if os.path.exists(file_save_ncdf):
+        print(f"File {file_save_ncdf} already exists. Skipping computation.")
+        sys.exit(0)
+
+    # %% Load Earthcare data
+    orbit_frame = "03994G"
+    habit_std = ["LargePlateAggregate", "8-ColumnAggregate"][0]  # Habit to use
+    psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][0]  # PSD to use
+
     ds_onion_invtable = xr.open_dataset(
         os.path.join(
-            os.getcwd(),
-            f"../data/onion_invtables/onion_invtable_{habit_std}_{psd}.nc",
+            os.path.dirname(os.path.dirname(__file__)),
+            f"data/onion_invtables/onion_invtable_{habit_std}_{psd}.nc",
         ),
     )[f"onion_invtable_{habit_std}_{psd}"]
+
+    # take a sample earthcare dataset
+    path_earthcare = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "data/earthcare/arts_input_data/",
+    )
+
+    ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
 
     # make FWC
     ds_earthcare_ = insert_fwc(ds_onion_invtable, ds_earthcare_)
 
     # remove clearsky profiles
-    mask_low_fwc = (ds_earthcare_["frozen_water_content"] == 0).all(dim="height_grid")
+    mask_low_fwc = (ds_earthcare_["frozen_water_content"].sel(height_grid=slice(5e3, None)) == 0).all(dim="height_grid")
     mask_cold_clouds = ds_earthcare_["pixel_values"] < 245
+    mask = np.logical_and(~mask_low_fwc, mask_cold_clouds)
 
-    ds_earthcare_subset = ds_earthcare_.where(mask_cold_clouds, drop=True).isel(
+    ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
         # nray=slice(None, None, 10),
     )
     print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
@@ -432,4 +450,4 @@ if __name__ == "__main__":
 
     # %%
     # %% save to file
-    ds_arts.to_netcdf(f"../data/earthcare/arts_output_data/cold_allsky_{habit_std}_{psd}_{orbit_frame}.nc")
+    ds_arts.to_netcdf(file_save_ncdf)
