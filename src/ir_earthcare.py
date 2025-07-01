@@ -1,12 +1,10 @@
 # %%
-from fileinput import filename
 from sys import argv
 import sys
 import pyarts
 import numpy as np
 import os
 import xarray as xr
-from datetime import datetime
 from tqdm import tqdm
 import easy_arts.wsv as wsv
 import easy_arts.easy_arts as ea
@@ -14,21 +12,19 @@ from easy_arts.data_model import (
     CloudboxOption,
     SpectralRegion,
 )
-from physics.unitconv import specific_humidity2h2o_p, mixing_ratio2mass_conc
+from physics.unitconv import specific_humidity2h2o_p
 from physics.constants import DENSITY_H2O_LIQUID
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import matplotlib.pyplot as plt
-
-path_abs_lookup_table = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "data/lookup_tables/abs_table_Earthcare_TIR2_2025-06-12_16:37:12.618561.xml",
-)
 
 # % map the standard habit to the Yang habit name
 map_habit = {
     "LargePlateAggregate": "Plate-Smooth",
     "8-ColumnAggregate": "8-ColumnAggregate-Smooth",
 }
+
+habit_std_list = ["LargePlateAggregate", "8-ColumnAggregate"]
+psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"]
 
 
 # %%
@@ -67,9 +63,9 @@ def cal_y_arts(ds_earthcare, habit_std, psd):
     ws.PlanetSet(option="Earth")
 
     # Our output unit
-    ws.iy_unit = "PlanckBT"  # "1"# W/(m^2 Hz sr)
+    ws.iy_unit = "PlanckBT"  # Planck brightness temperature
 
-    # We do not care about polarization in this example
+    # We do not care about polarization
     ws.stokes_dim = 1
 
     # The atmosphere is assumed 1-dimensional
@@ -90,6 +86,10 @@ def cal_y_arts(ds_earthcare, habit_std, psd):
     ws.abs_nls_interp_order = 3
     ws.abs_t_interp_order = 3
     ws.abs_p_interp_order = 3
+    path_abs_lookup_table = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "data/lookup_tables/abs_table_Earthcare_TIR2_2025-06-12_16:37:12.618561.xml",
+    )
     ws.ReadXML(
         ws.abs_lookup,
         path_abs_lookup_table,
@@ -242,18 +242,7 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
     else:
         ws.z_surface = ds_earthcare["height_grid"].min().data.reshape(1, 1)
 
-    vmr_h2o = (
-        (
-            specific_humidity2h2o_p(
-                ds_earthcare["specific_humidity"],
-                ds_earthcare["pressure"],
-            )
-            / ds_earthcare["pressure"]
-        )
-        .fillna(0)
-        .data.reshape(-1, 1, 1)
-    )
-
+    vmr_h2o = ds_earthcare['h2o_volume_mixing_ratio'].data.reshape(-1, 1, 1)
     vmr_co2 = 427.53e-6 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
     vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
     vmr_o3 = 28.9644 / 47.9982 * ds_earthcare["ozone_mass_mixing_ratio"].data.reshape(-1, 1, 1)
@@ -348,29 +337,23 @@ def insert_fwc(ds_onion_invtable, ds_earthcare_):
 if __name__ == "__main__":
 
     # take system arguments to select habit, psd and orbit frame
-    if len(argv) == 3:
-        i = int(argv[1])
-        j = int(argv[2])
-        orbit_frame = "01162E"  # default orbit frame
-    elif len(argv) == 4:
+    if len(argv) == 4:
         i = int(argv[1])
         j = int(argv[2])
         orbit_frame = argv[3]
     else:
-        i = 0
-        j = 0
-        orbit_frame = "01162E"  # default orbit frame
         raise ValueError("Please provide habit and psd indices as command line arguments.")
 
-    # % choose invtable
-    habit_std = ["LargePlateAggregate", "8-ColumnAggregate"][i]  # Habit to use
-    psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][j]  # PSD to use
+    # %% choose invtable
+
+    habit_std = habit_std_list[i]  # Habit to use
+    psd = psd_list[j]  # PSD to use
     print(habit_std)
     print(psd)
 
     file_save_ncdf = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
-        f"data/earthcare/arts_output_data/cold_allsky_{habit_std}_{psd}_{orbit_frame}.nc",
+        f"data/earthcare/arts_output_data/cold_3rd_{habit_std}_{psd}_{orbit_frame}.nc",
     )
     # check if the file already exists
     if os.path.exists(file_save_ncdf):
@@ -378,10 +361,6 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # %% Load Earthcare data
-    orbit_frame = "03994G"
-    habit_std = ["LargePlateAggregate", "8-ColumnAggregate"][0]  # Habit to use
-    psd = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"][0]  # PSD to use
-
     ds_onion_invtable = xr.open_dataset(
         os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
@@ -389,24 +368,27 @@ if __name__ == "__main__":
         ),
     )[f"onion_invtable_{habit_std}_{psd}"]
 
-    # take a sample earthcare dataset
+    # take an earthcare input dataset
     path_earthcare = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
         "data/earthcare/arts_input_data/",
     )
-
     ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
 
-    # make FWC
+    # put FWC
     ds_earthcare_ = insert_fwc(ds_onion_invtable, ds_earthcare_)
 
     # remove clearsky profiles
     mask_low_fwc = (ds_earthcare_["frozen_water_content"].sel(height_grid=slice(5e3, None)) == 0).all(dim="height_grid")
-    mask_cold_clouds = ds_earthcare_["pixel_values"] < 245
+    mask_cold_clouds = ds_earthcare_["pixel_values"] < 245  # K
     mask = np.logical_and(~mask_low_fwc, mask_cold_clouds)
 
+    if (~mask).all():
+        print("All nrays are cleared sky. No computation needed.")
+        sys.exit(0)
+
     ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
-        # nray=slice(None, None, 10),
+        nray=slice(None, None, 3),  # skip every xth ray to reduce computation time
     )
     print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
 
