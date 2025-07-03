@@ -242,7 +242,7 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
     else:
         ws.z_surface = ds_earthcare["height_grid"].min().data.reshape(1, 1)
 
-    vmr_h2o = ds_earthcare['h2o_volume_mixing_ratio'].data.reshape(-1, 1, 1)
+    vmr_h2o = ds_earthcare["h2o_volume_mixing_ratio"].data.reshape(-1, 1, 1)
     vmr_co2 = 427.53e-6 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
     vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
     vmr_o3 = 28.9644 / 47.9982 * ds_earthcare["ozone_mass_mixing_ratio"].data.reshape(-1, 1, 1)
@@ -355,7 +355,7 @@ if __name__ == "__main__":
         os.path.dirname(os.path.dirname(__file__)),
         f"data/earthcare/arts_output_data/cold_3rd_{habit_std}_{psd}_{orbit_frame}.nc",
     )
-    # check if the file already exists
+    # %% check if the file already exists
     if os.path.exists(file_save_ncdf):
         print(f"File {file_save_ncdf} already exists. Skipping computation.")
         sys.exit(0)
@@ -420,15 +420,13 @@ if __name__ == "__main__":
     da_vmr = xr.concat(vmr, dim="nray")
     da_auxiliary = xr.concat(auxiliary, dim="nray")
 
-    ds_arts = (
-        da_auxiliary.assign(
-            arts=da_y,
-            bulkprop=da_bulkprop,
-            vmr=da_vmr,
-        )
-        .sortby("time")
-        .assign(ds_earthcare_subset)
-    )
+    ds_arts = da_auxiliary.assign(
+        arts=da_y,
+        bulkprop=da_bulkprop,
+        vmr=da_vmr,
+    ).assign(ds_earthcare_subset)
+    if len(ds_arts.nray) > 1:
+        ds_arts = ds_arts.sortby("time")
 
     # %%
     # %% save to file
