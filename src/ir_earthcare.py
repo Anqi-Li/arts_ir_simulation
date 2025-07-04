@@ -408,7 +408,7 @@ if __name__ == "__main__":
 
     with ProcessPoolExecutor(max_workers=64) as executor:
         futures = [executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))]
-        for f in tqdm(as_completed(futures), total=len(futures), desc="process nrays"):
+        for f in tqdm(as_completed(futures), total=len(futures), desc="process nrays", file=sys.stdout, dynamic_ncols=True):
             da_y, da_bulkprop, da_vmr, da_auxiliary = f.result()
             y.append(da_y)
             bulkprop.append(da_bulkprop)
