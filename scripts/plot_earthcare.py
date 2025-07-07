@@ -196,8 +196,8 @@ c = plot_conditional_panel(
 # Latitude groups
 for i, (group_name, ds_group) in enumerate(groups):
     y_true_group = ds_group["pixel_values"].values.flatten()
-    # y_pred_group = ds_group["arts"].mean("f_grid").values.flatten()
-    y_pred_group = ds_group["cloud_top_T"].values.flatten()
+    y_pred_group = ds_group["arts"].mean("f_grid").values.flatten()
+    # y_pred_group = ds_group["cloud_top_T"].values.flatten()
     plot_conditional_panel(
         ax=axes[i + 1],
         y_true=y_true_group,
@@ -234,6 +234,7 @@ if save:
         dpi=300,
         bbox_inches="tight",
     )
+    print(f'Figure is saved to "../data/figures/arts_output_distribution_latitude_{habit_std}_{psd}_{len(orbits)}.png"')
 
 # %% plot the results in time series
 habit_std, psd, orbits, ds_arts = load_arts_earthcare_data(0, 0, n_files=10, random_seed=42)
