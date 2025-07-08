@@ -2,3 +2,13 @@
 /.vscode
 /.conda
 */__pycache__
+*.egg-info
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+*.ipynb_checkpoints
+*.log
+*.out
+*.tmp
+*.cache
