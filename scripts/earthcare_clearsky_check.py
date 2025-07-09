@@ -28,7 +28,7 @@ path_earthcare = os.path.join(
 ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
 
 # put FWC
-ds_earthcare_ = insert_fwc(ds_onion_invtable, ds_earthcare_)
+ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
 
 # mask clearsky profiles
 mask_no_fwc = (ds_earthcare_["frozen_water_content"] == 0).all(dim="height_grid")
@@ -40,11 +40,17 @@ print(f"Number of nrays (clearsky): {len(ds_earthcare_clearsky.nray)}")
 # mask high and cold cloud profiles
 def get_cloud_top_height(ds, fwc_threshold=1e-5):
     """Calculate the cloud top height based on the frozen water content."""
-    return ds["height_grid"].where(ds["frozen_water_content"] > fwc_threshold).max("height_grid")
+    return (
+        ds["height_grid"]
+        .where(ds["frozen_water_content"] > fwc_threshold)
+        .max("height_grid")
+    )
 
 
 ds_earthcare_["cloud_top_height"] = get_cloud_top_height(ds_earthcare_)
-mask_high_cloud = (ds_earthcare_["cloud_top_height"] > 5e3) & (ds_earthcare_["pixel_values"] < 245)
+mask_high_cloud = (ds_earthcare_["cloud_top_height"] > 5e3) & (
+    ds_earthcare_["pixel_values"] < 245
+)
 ds_earthcare_highcloud = ds_earthcare_.where(mask_high_cloud, drop=True)
 print(f"Number of nrays (high cloud): {len(ds_earthcare_highcloud.nray)}")
 
@@ -52,7 +58,9 @@ print(f"Number of nrays (high cloud): {len(ds_earthcare_highcloud.nray)}")
 fig, ax = plt.subplots(2, 1, constrained_layout=True, sharex=True)
 kwargs = dict(x="nray")
 ds_earthcare_["frozen_water_content"].pipe(np.log10).plot(ax=ax[0], **kwargs, vmin=-5)
-ds_earthcare_["cloud_liquid_water_content"].pipe(np.log10).plot(ax=ax[1], **kwargs, vmin=-5)
+ds_earthcare_["cloud_liquid_water_content"].pipe(np.log10).plot(
+    ax=ax[1], **kwargs, vmin=-5
+)
 
 # %% loop over nrays
 ds_earthcare_subset = ds_earthcare_clearsky.isel(nray=slice(None, None, 5))
@@ -74,9 +82,13 @@ vmr = []
 auxiliary = []
 
 with ProcessPoolExecutor(max_workers=20) as executor:
-    futures = [executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))]
+    futures = [
+        executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))
+    ]
     failed_indices = []
-    for idx, f in enumerate(tqdm(as_completed(futures), total=len(futures), desc="process nrays")):
+    for idx, f in enumerate(
+        tqdm(as_completed(futures), total=len(futures), desc="process nrays")
+    ):
         try:
             da_y, da_bulkprop, da_vmr, da_auxiliary = f.result()
             y.append(da_y)
@@ -105,7 +117,9 @@ ds_arts = (
 ).rename(height_grid="z")
 
 # %% some filtering?
-ds_arts["cloud_top_height"] = get_cloud_top_height(ds_arts.rename(z="height_grid"), fwc_threshold=1e-5)
+ds_arts["cloud_top_height"] = get_cloud_top_height(
+    ds_arts.rename(z="height_grid"), fwc_threshold=1e-5
+)
 mask_high_cloud = (ds_arts["cloud_top_height"] > 5e3) & (ds_arts["pixel_values"] < 245)
 ds_arts = ds_arts.where(mask_high_cloud, drop=True)
 
@@ -118,7 +132,12 @@ ds_arts.surfaceElevation.plot(ax=ax[0], color="k", lw=0.5, label="Surface Elevat
 im0 = ds_arts["dBZ"].plot.imshow(ax=ax[0], **kwargs)
 ax[0].legend()
 
-im1 = ds_arts["bulkprop"].sel(scat_species="LWC").pipe(np.log10).plot.imshow(ax=ax[1], vmin=-4, vmax=-1, **kwargs)
+im1 = (
+    ds_arts["bulkprop"]
+    .sel(scat_species="LWC")
+    .pipe(np.log10)
+    .plot.imshow(ax=ax[1], vmin=-4, vmax=-1, **kwargs)
+)
 
 ds_arts["rain_water_content"].pipe(np.log10).plot.imshow(ax=ax[2], vmin=-4, **kwargs)
 
