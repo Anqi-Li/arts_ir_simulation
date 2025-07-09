@@ -9,7 +9,7 @@ import glob
 import warnings
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide *")
-save = True
+save = False
 
 
 # %% read output files
@@ -31,13 +31,16 @@ def load_arts_earthcare_data(habit_std_idx, psd_idx, orbit_frame=None, n_files=N
     orbits = [o[-9:-3] for o in matching_files]
     print(f"Number of matching files: {len(matching_files)}")
 
-    ds_arts = xr.open_mfdataset(
-        matching_files,
-        chunks="auto",
-        combine="nested",
-        concat_dim="nray",
-        parallel=True,
-    ).sortby("profileTime")
+    # ds_arts = xr.open_mfdataset(
+    #     matching_files,
+    #     chunks="auto",
+    #     combine="nested",
+    #     concat_dim="nray",
+    #     parallel=True,
+    # ).sortby("profileTime")
+
+    datasets = [xr.open_dataset(f, chunks='auto').assign_coords(orbit_frame=f[-9:-3]) for f in matching_files]
+    ds_arts = xr.concat(datasets, dim="nray").sortby("profileTime")
 
     return habit_std, psd, orbits, ds_arts
 
@@ -93,7 +96,112 @@ def plot_conditional_panel(ax, y_true, y_pred, bin_edges, title, vmin=0, vmax=0.
         )
     return c
 
+# %% groupby latitude bins
+habit_std, psd, orbits, ds_arts = load_arts_earthcare_data(0, 2)
+ds_arts["cloud_top_T"] = get_cloud_top_T(ds_arts, fwc_threshold=1e-5)
+plot_cloud_top_T = True  # Set to False to plot ARTS brightness temperature instead
 
+# Group by latitude bins
+groups = ds_arts.groupby_bins(
+    abs(ds_arts["latitude"]),
+    bins=[0, 30, 60, 90],
+    labels=["low", "mid", "high"],
+)
+
+n_groups = len(groups)
+
+fig, axes = plt.subplots(1, n_groups + 1, figsize=(6 * (n_groups + 1), 6), constrained_layout=True, sharex=True, sharey=True)
+if n_groups + 1 == 1:
+    axes = np.array([axes])
+
+vmin, vmax = 0, 0.14
+bin_edges_global = np.arange(180, 280, 2)
+
+
+# Total (all data)
+y_true_total = ds_arts["pixel_values"].values.flatten()
+if plot_cloud_top_T:
+    y_pred_total = ds_arts["cloud_top_T"].values.flatten()
+else:
+    y_pred_total = ds_arts["arts"].mean("f_grid").values.flatten()
+
+c = plot_conditional_panel(
+    ax=axes[0],
+    y_true=y_true_total,
+    y_pred=y_pred_total,
+    bin_edges=bin_edges_global,
+    title=f"Total\n{habit_std}, {psd}, {len(ds_arts.nray)} profiles",
+    vmin=vmin,
+    vmax=vmax,
+    show_mbe=True,
+)
+
+# Latitude groups
+for i, (group_name, ds_group) in enumerate(groups):
+    y_true_group = ds_group["pixel_values"].values.flatten()
+    if plot_cloud_top_T:
+        y_pred_group = ds_group["cloud_top_T"].values.flatten()
+    else:
+        y_pred_group = ds_group["arts"].mean("f_grid").values.flatten()
+
+    plot_conditional_panel(
+        ax=axes[i + 1],
+        y_true=y_true_group,
+        y_pred=y_pred_group,
+        bin_edges=bin_edges_global,
+        title=f"{group_name.capitalize()} latitude\n{habit_std}, {psd}, {len(ds_group.nray)} profiles",
+        vmin=vmin,
+        vmax=vmax,
+        show_mbe=True,
+    )
+
+fig.colorbar(c, ax=axes, orientation="vertical", label="P(Predicted | True)", fraction=0.02, pad=0.04)
+
+if plot_cloud_top_T:
+    plt.figtext(
+        0.5,
+        -0.15,
+        f"""
+        This figure shows the conditional PDF of the cloud top T (predicted) given the MSI brightness temperature (true).
+        Cloud top T is defined as the T at the highest height where the FWC is above a threshold (1e-5).
+        """,
+        ha="center",
+        fontsize=10,
+        wrap=True,
+    )
+
+else:
+    plt.figtext(
+        0.5,
+        -0.15,
+        f"""
+        This figure shows the conditional PDF of the ARTS brightness temperature (predicted) given the MSI brightness temperature (true).
+        The first panel shows the total distribution, while the other panels show the distribution for different latitude bins.
+        The assumed habit and PSD, and the total number of orbit frames are shown in the title.
+        The ARTS brightness temperature is averaged over the f_grid (length of {len(ds_arts['f_grid'])}).
+        """,
+        ha="center",
+        fontsize=10,
+        wrap=True,
+    )
+
+    if save:
+        plt.savefig(
+            f"../data/figures/arts_output_distribution_latitude_{habit_std}_{psd}_{len(orbits)}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        print(f'Figure is saved to "../data/figures/arts_output_distribution_latitude_{habit_std}_{psd}_{len(orbits)}.png"')
+
+#%%
+ds_arts_groupby_orbit=ds_arts.where((ds_arts.cloud_top_T<200).compute(), drop=True).groupby('orbit_frame')
+dict_group_len = {k:len(v) for k,v in ds_arts_groupby_orbit.groups.items()}
+# Sort the dictionary by values in descending order and display the top 5 orbit numbers
+sorted_orbits = sorted(dict_group_len.items(), key=lambda x: x[1], reverse=True)[:5]
+print("Top 5 orbit numbers by profile count:")
+for orbit, profile_count in sorted_orbits:
+    print(f"Orbit: {orbit}, Profiles: {profile_count}")
+    
 # %% Plot total distribution of ARTS output
 habit_std, psd, orbits, ds_arts = load_arts_earthcare_data(0, 0)
 
@@ -156,85 +264,8 @@ plt.figtext(
 )
 if save:
     plt.savefig(f"../data/figures/arts_output_distribution_{habit_std}_{psd}_{len(orbits)}.png", dpi=300, bbox_inches="tight")
+    print(f'Figure is saved to "../data/figures/arts_output_distribution_{habit_std}_{psd}_{len(orbits)}.png"')
 
-
-# %% groupby latitude bins
-habit_std, psd, orbits, ds_arts = load_arts_earthcare_data(1, 2)
-ds_arts["cloud_top_T"] = get_cloud_top_T(ds_arts, fwc_threshold=1e-5)
-
-# Group by latitude bins
-groups = ds_arts.groupby_bins(
-    abs(ds_arts["latitude"]),
-    bins=[0, 30, 60, 90],
-    labels=["low", "mid", "high"],
-)
-
-n_groups = len(groups)
-
-fig, axes = plt.subplots(1, n_groups + 1, figsize=(6 * (n_groups + 1), 6), constrained_layout=True, sharex=True, sharey=True)
-if n_groups + 1 == 1:
-    axes = np.array([axes])
-
-vmin, vmax = 0, 0.14
-bin_edges_global = np.arange(200, 280, 2)
-
-# Total (all data)
-y_true_total = ds_arts["pixel_values"].values.flatten()
-y_pred_total = ds_arts["arts"].mean("f_grid").values.flatten()
-# y_pred_total = ds_arts["cloud_top_T"].values.flatten()
-c = plot_conditional_panel(
-    ax=axes[0],
-    y_true=y_true_total,
-    y_pred=y_pred_total,
-    bin_edges=bin_edges_global,
-    title=f"Total\n{habit_std}, {psd}, {len(ds_arts.nray)} profiles",
-    vmin=vmin,
-    vmax=vmax,
-    show_mbe=True,
-)
-
-# Latitude groups
-for i, (group_name, ds_group) in enumerate(groups):
-    y_true_group = ds_group["pixel_values"].values.flatten()
-    y_pred_group = ds_group["arts"].mean("f_grid").values.flatten()
-    # y_pred_group = ds_group["cloud_top_T"].values.flatten()
-    plot_conditional_panel(
-        ax=axes[i + 1],
-        y_true=y_true_group,
-        y_pred=y_pred_group,
-        bin_edges=bin_edges_global,
-        title=f"{group_name.capitalize()} latitude\n{habit_std}, {psd}, {len(ds_group.nray)} profiles",
-        vmin=vmin,
-        vmax=vmax,
-        show_mbe=True,
-    )
-
-fig.colorbar(c, ax=axes, orientation="vertical", label="P(Predicted | True)", fraction=0.02, pad=0.04)
-
-plt.figtext(
-    0.5,
-    -0.15,
-    f"""
-        This figure shows the conditional PDF of the ARTS brightness temperature (predicted) given the MSI brightness temperature (true).
-        The first panel shows the total distribution, while the other panels show the distribution for different latitude bins.
-        The assumed habit and PSD, and the total number of orbit frames are shown in the title.
-        The ARTS brightness temperature is averaged over the f_grid (length of {len(ds_arts['f_grid'])}).
-    """,
-    # f"""
-    # This figure shows the conditional PDF of the cloud top T (predicted) given the MSI brightness temperature (true).
-    # Cloud top T is defined as the T at the highest height where the FWC is above a threshold (1e-5).
-    # """,
-    ha="center",
-    fontsize=10,
-    wrap=True,
-)
-if save:
-    plt.savefig(
-        f"../data/figures/arts_output_distribution_latitude_{habit_std}_{psd}_{len(orbits)}.png",
-        dpi=300,
-        bbox_inches="tight",
-    )
-    print(f'Figure is saved to "../data/figures/arts_output_distribution_latitude_{habit_std}_{psd}_{len(orbits)}.png"')
 
 # %% plot the results in time series
 habit_std, psd, orbits, ds_arts = load_arts_earthcare_data(0, 0, n_files=10, random_seed=42)
