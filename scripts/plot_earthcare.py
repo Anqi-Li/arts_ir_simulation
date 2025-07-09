@@ -31,14 +31,6 @@ def load_arts_earthcare_data(habit_std_idx, psd_idx, orbit_frame=None, n_files=N
     orbits = [o[-9:-3] for o in matching_files]
     print(f"Number of matching files: {len(matching_files)}")
 
-    # ds_arts = xr.open_mfdataset(
-    #     matching_files,
-    #     chunks="auto",
-    #     combine="nested",
-    #     concat_dim="nray",
-    #     parallel=True,
-    # ).sortby("profileTime")
-
     datasets = [xr.open_dataset(f, chunks='auto').assign_coords(orbit_frame=f[-9:-3]) for f in matching_files]
     ds_arts = xr.concat(datasets, dim="nray").sortby("profileTime")
 
