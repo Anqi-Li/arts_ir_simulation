@@ -12,19 +12,18 @@ from easy_arts.data_model import (
     CloudboxOption,
     SpectralRegion,
 )
-from physics.unitconv import specific_humidity2h2o_p
-from physics.constants import DENSITY_H2O_LIQUID
 from concurrent.futures import ProcessPoolExecutor, as_completed
-import matplotlib.pyplot as plt
+from onion_table import *
 
 # % map the standard habit to the Yang habit name
 map_habit = {
     "LargePlateAggregate": "Plate-Smooth",
     "8-ColumnAggregate": "8-ColumnAggregate-Smooth",
+    "6-BulletRosette": "SolidBulletRosette-Smooth",
 }
 
-habit_std_list = ["LargePlateAggregate", "8-ColumnAggregate"]
-psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML"]
+habit_std_list = ["LargePlateAggregate", "8-ColumnAggregate", "6-BulletRosette"]
+psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "Exponential"]
 
 
 # %%
@@ -123,7 +122,9 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coefs_exp=None):
 
     # % Set the cloud layer
     scat_species = ["FWC", "LWC"]  # Arbitrary names
-    insert_bulkprop_from_earthcare(ds_earthcare, ws, habit_std, psd, scat_species, coefs_exp=coefs_exp)
+    insert_bulkprop_from_earthcare(
+        ds_earthcare, ws, habit_std, psd, scat_species, coefs_exp=coefs_exp
+    )
 
     # %
     # Cloudbox
@@ -337,6 +338,20 @@ def get_frozen_water_content(ds_onion_invtable, ds_earthcare_):
     return ds_earthcare_
 
 
+def get_frozen_water_path(ds):
+    """Calculate the frozen water path from the frozen water content."""
+    ds["frozen_water_path"] = (
+        ds["frozen_water_content"]
+        .integrate("height_grid")
+        .assign_attrs(
+            long_name="Frozen Water Path",
+            units="kg/m^2",
+            description="Integrated frozen water content over height grid",
+        )
+    )
+    return ds
+
+
 def get_cloud_top_height(ds, fwc_threshold=1e-5):
     """Calculate the cloud top height based on the frozen water content."""
     ds["cloud_top_height"] = (
@@ -388,7 +403,7 @@ if __name__ == "__main__":
 
     file_save_ncdf = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
-        f"data/earthcare/arts_output_data/cold_3rd_{habit_std}_{psd}_{orbit_frame}.nc",
+        f"data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc",
     )
 
     # %% check if the file already exists
@@ -397,13 +412,29 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # %% Load Earthcare data
-    ds_onion_invtable = xr.open_dataset(
-        os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            f"data/onion_invtables/onion_invtable_{habit_std}_{psd}.nc",
+    # ds_onion_invtable = xr.open_dataset(
+    #     os.path.join(
+    #         os.path.dirname(os.path.dirname(__file__)),
+    #         f"data/onion_invtables/onion_invtable_{habit_std}_{psd}.nc",
+    #     ),
+    # )[f"onion_invtable_{habit_std}_{psd}"]
+    if psd == "Exponential":
+        # coefficients for the exponential PSD
+        coefs_exp = {
+            "n0": 1e10,  # Number concentration
+            "ga": 1.5,  # Gamma parameter
+        }
+    else:
+        coefs_exp = None
+    ds_onion_invtable = get_ds_table(
+        habit=habit_std,
+        psd=psd,
+        ws=make_onion_invtable(
+            habit=habit_std,
+            psd=psd,
+            coefs_exp=coefs_exp,
         ),
-    )[f"onion_invtable_{habit_std}_{psd}"]
-
+    )
     # take an earthcare input dataset
     path_earthcare = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
@@ -413,20 +444,24 @@ if __name__ == "__main__":
 
     # put FWC
     ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
+    ds_earthcare_ = get_frozen_water_path(ds_earthcare_)
 
     # remove clearsky profiles
-    mask_low_fwc = (
-        ds_earthcare_["frozen_water_content"].sel(height_grid=slice(5e3, None)) == 0
-    ).all(dim="height_grid")
-    mask_cold_clouds = ds_earthcare_["pixel_values"] < 245  # K
-    mask = np.logical_and(~mask_low_fwc, mask_cold_clouds)
+    # mask_low_fwc = (
+    #     ds_earthcare_["frozen_water_content"].sel(height_grid=slice(5e3, None)) == 0
+    # ).all(dim="height_grid")
+    # mask_cold_clouds = ds_earthcare_["pixel_values"] < 245  # K
+    # mask = np.logical_and(~mask_low_fwc, mask_cold_clouds)
+    mask = (
+        ds_earthcare_["frozen_water_path"] > 5  # kg/m^2 threshold for frozen water path
+    )
 
     if (~mask).all():
         print("All nrays are cleared sky. No computation needed.")
         sys.exit(0)
 
     ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
-        nray=slice(None, None, 3),  # skip every xth ray to reduce computation time
+        nray=slice(None, None, 5),  # skip every xth ray to reduce computation time
     )
     print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
 
@@ -437,6 +472,7 @@ if __name__ == "__main__":
             ds_earthcare_subset.isel(nray=i),
             habit_std,
             psd,
+            coefs_exp=coefs_exp,
         )
 
     y = []

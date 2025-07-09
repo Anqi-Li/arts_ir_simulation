@@ -3,6 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 import glob
+from ir_earthcare import habit_std_list, psd_list
 
 log_dir = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -40,8 +41,8 @@ orbits = [o[-9:-3] for o in os.listdir(orbit_dir)]
 with open(log_path, "w") as logfile:
     for orbit in orbits:
         failed = False
-        for i in range(2):
-            for j in range(3):
+        for i in range(len(habit_std_list)):
+            for j in range(len(psd_list)):
                 try:
                     run_earthcare_ir(orbit, i, j)
                     print(f"Success for orbit {orbit}, habit {i}, psd {j}")
