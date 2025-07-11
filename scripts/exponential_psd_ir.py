@@ -1,72 +1,38 @@
 # %%
 import numpy as np
-from cycler import cycler
-from pyarts.workspace import Workspace
 
 from onion_table import *
 from ir_earthcare import *
+from plotting import plot_fwc_and_temperatures, plot_psd_mgd
 
 # %%
-habit = ["LargePlateAggregate", "8-ColumnAggregate"][0]
-psd = "Exponential"
-coefs_exp = {
-    "n0": 1e10,  # Number concentration
-    "ga": 1.5,  # Gamma parameter
-}
+habit = habit_std_list[0]
+psd = psd_list[0]
+print(f"Selected habit: {habit}, PSD: {psd}")
+coef_mgd = (
+    {
+        "n0": 1e10,  # Number concentration
+        "ga": 1,  # Gamma parameter
+        "mu": 0,  # Default value for mu
+    }
+    if psd == "exponential"
+    else None
+)
+
 ds_onion_invtable = get_ds_table(
     habit=habit,
     psd=psd,
     ws=make_onion_invtable(
         habit=habit,
         psd=psd,
-        coefs_exp=coefs_exp,
+        coef_mgd=coef_mgd,
     ),
 )
 # plot_table(ds_onion_invtable)
+# plot_psd_mgd(coefs_mgd=coef_mgd)
 
-# %%
-
-
-def plot_psd_from_exponential(coefs_exp):
-    ws = Workspace(verbosity=0)
-    ws.psd_size_grid = np.linspace(1e-6, 50e-6)  # np.logspace(-5, -3, 21)
-    ws.dpnd_data_dx_names = []
-
-    # Setting all 4 parameters by GIN
-    # This generates a single PSD
-    ws.pnd_agenda_input_t = np.array([190])  # Not really used
-    ws.pnd_agenda_input = np.array([[]])
-    ws.pnd_agenda_input_names = []
-    ws.psdModifiedGamma(
-        n0=coefs_exp.get("n0"),
-        ga=coefs_exp.get("ga"),
-        la=coefs_exp.get("la", 1e7),  # Default value if not provided
-        mu=0,
-        t_min=0,
-        t_max=999,
-        picky=1,
-    )
-    plt.figure()
-    plt.plot(
-        ws.psd_size_grid.value * 1e6,
-        ws.psd_data.value[0],
-        label=f"N₀={coefs_exp.get('n0'):.1e}, μ=0, λ={coefs_exp.get('la', 1e7):.1e}, γ={coefs_exp.get('ga')}",
-        c="C0",
-    )
-    # plt.ylim(1e-3, 1e-1)
-    # plt.yscale("log")
-    # plt.xscale("log")
-    plt.xlabel("Diameter (µm)")
-    plt.ylabel("PSD (µm⁻¹ cm⁻³)")
-    plt.legend()
-    plt.grid()
-    plt.show()
-
-
-plot_psd_from_exponential(coefs_exp=dict(n0=10**10, ga=1.5))
 
 # %% take an earthcare input dataset
-
 orbit_frame = "03872A"
 path_earthcare = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -74,135 +40,59 @@ path_earthcare = os.path.join(
 )
 ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
 ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
-ds_earthcare_["frozen_water_path"] = (
-    ds_earthcare_["frozen_water_content"]
+ds_earthcare_ = get_frozen_water_path(ds_earthcare_)
+
+ds_earthcare_["reflectivity_integral_log10"] = (
+    ds_earthcare_["dBZ"]
+    .pipe(lambda x: 10 ** (x / 10))
+    .fillna(0)
     .integrate("height_grid")
-    .assign_attrs(
-        units="kg/m^2",
-        long_name="Frozen Water Path",
-        description="Integrated frozen water content over height grid",
-    )
+    .pipe(np.log10)
 )
-# fwc_threshold = 1e-5
-# ds_earthcare_ = get_cloud_top_T(ds_earthcare_, fwc_threshold=fwc_threshold)
-mask = (
-    ds_earthcare_["frozen_water_path"]
-    > 5
-    # & (ds_earthcare_["cloud_top_T"] < 245)
-    # & (ds_earthcare_["pixel_values"] < 245)
-    # & (ds_earthcare_["frozen_water_content"] > 1e-5).any("height_grid")
-)
+mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5
 ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
-    nray=slice(None, None, 6),  # skip every xth ray to reduce computation time
+    nray=slice(None, None, 5),  # skip every xth ray to reduce computation time
 )
 print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
 
+# % plot data
+fig, ax = plot_fwc_and_temperatures(ds_earthcare_subset, fwc_threshold=1e-5)
+# add some text for the chosen habit, psd and coef_mgd below the plots
+ax[1].text(
+    0.05,
+    -0.3,
+    f"Habit: {habit}, PSD: {psd}"
+    + (
+        f"n0: {coef_mgd['n0']:.1e}, ga: {coef_mgd['ga']}"
+        if psd == "exponential"
+        else ""
+    ),
+    transform=ax[1].transAxes,
+    fontsize=10,
+    verticalalignment="top",
+    bbox=dict(facecolor="white", alpha=0.5),
+)
 
-# %%
-def plot_frozen_water_and_temperature(
-    ds,
-    fwc_threshold=None,
-    temperature_vars=["pixel_values", "cloud_top_T"],
-    add_diff=False,
-):
-    if fwc_threshold is None and "cloud_top_T" not in ds:
-        raise ValueError(
-            "Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset."
-        )
-    if fwc_threshold is not None:
-        ds = get_cloud_top_T(ds, fwc_threshold=fwc_threshold)
-
-    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(12, 6), constrained_layout=True)
-    ds["frozen_water_content"].pipe(np.log10).plot(
-        ax=ax[0],
-        x="nray",
-        y="height_grid",
-        cmap="viridis",
-        cbar_kwargs={"label": "Frozen Water Content log10(kg/m^3)"},
-    )
-    ds["cloud_top_height"].plot(
-        ax=ax[0],
-        x="nray",
-        label="Cloud Top Height",
-        color="orange",
-    )
-
-    ds[temperature_vars].to_array().plot.line(
-        ax=ax[1],
-        x="nray",
-        hue="variable",
-        add_legend=True,
-    )
-    if add_diff:
-        ax1_twinx = ax[1].twinx()
-        default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-        new_color_cycle = cycler(color=default_colors[1:])
-        ax1_twinx.set_prop_cycle(new_color_cycle)
-
-        ds[temperature_vars].to_array("diff").diff("diff").plot.line(
-            ax=ax1_twinx,
-            x="nray",
-            hue="diff",
-            add_legend=True,
-            linestyle="--",
-            alpha=0.5,
-        )
-        ax1_twinx.set_ylabel("Temperature Difference (K)")
-
-    ax[0].set_ylabel("Height (m)")
-    ax[0].set_title("Frozen Water Content")
-    ax[0].set_xlabel("")
-    ax[0].legend()
-    ax[1].set_xlabel("Ray Index")
-    ax[1].set_ylabel("Temperature (K)")
-    ax[1].set_title("Temperatures")
-
-    # add some text for the chosen habit, psd and coefs_exp below the plots
-    ax[1].text(
-        0.05,
-        -0.3,
-        f"Habit: {habit}, PSD: {psd}, n0: {coefs_exp['n0']:.1e}, ga: {coefs_exp['ga']}",
-        transform=ax[1].transAxes,
-        fontsize=10,
-        verticalalignment="top",
-        bbox=dict(facecolor="white", alpha=0.5),
-    )
-
-    # add text annotation for fwc_threshold
-    ax[1].text(
-        0.05,
-        -0.5,
-        f"FWC Threshold for cloud definition: {ds['cloud_top_height'].attrs['fwc_threshold']:.1e} kg/m³",
-        transform=ax[1].transAxes,
-        fontsize=10,
-        verticalalignment="top",
-        bbox=dict(facecolor="white", alpha=0.5),
-    )
-    plt.show()
+# add text annotation for fwc_threshold
+ax[1].text(
+    0.05,
+    -0.5,
+    f"FWC Threshold for cloud definition: {ds_earthcare_subset['cloud_top_height'].attrs['fwc_threshold']:.1e} kg/m³",
+    transform=ax[1].transAxes,
+    fontsize=10,
+    verticalalignment="top",
+    bbox=dict(facecolor="white", alpha=0.5),
+)
+plt.show()
 
 
-plot_frozen_water_and_temperature(ds_earthcare_subset, fwc_threshold=4e-5)
-
-# %%
-# i = 50
-# da_y, da_bulkprop, da_vmr, da_auxiliary = cal_y_arts(
-#     ds_earthcare_subset.isel(nray=i),
-#     habit,
-#     psd,
-#     coefs_exp=coefs_exp,
-# )
-# print("arts brightness temperature {} K".format(da_y.mean().data))
-# print(f"pixel values {ds_earthcare_subset.pixel_values.isel(nray=i).data} K")
-# print(f'n0: {coefs_exp["n0"]}, ga: {coefs_exp["ga"]}')
-
-
-# %%
+# %% process
 def process_nray(i):
     return cal_y_arts(
         ds_earthcare_subset.isel(nray=i),
         habit,
         psd,
-        coefs_exp=coefs_exp,
+        coef_mgd=coef_mgd,
     )
 
 
@@ -233,11 +123,12 @@ da_bulkprop = xr.concat(bulkprop, dim="nray")
 da_vmr = xr.concat(vmr, dim="nray")
 da_auxiliary = xr.concat(auxiliary, dim="nray")
 
+#%%
 ds_arts = da_auxiliary.assign(
     arts=da_y,
     bulkprop=da_bulkprop,
     vmr=da_vmr,
-)
+)#.assign(ds_earthcare_subset)
 if len(ds_arts.nray) > 1:
     ds_arts = ds_arts.sortby("time")
 
@@ -245,10 +136,10 @@ ds_arts = xr.merge([ds_arts, ds_earthcare_subset])
 
 # %%
 ds_arts["arts_y_mean"] = ds_arts["arts"].mean("f_grid")
-plot_frozen_water_and_temperature(
+fig, ax = plot_fwc_and_temperatures(
     ds_arts,
     fwc_threshold=4e-5,
-    temperature_vars=["pixel_values", "arts_y_mean", "cloud_top_T"],
+    temperature_vars=["pixel_values", "cloud_top_T", "arts_y_mean"],
 )
 
 # %%

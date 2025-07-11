@@ -15,7 +15,7 @@ from select_habits import get_habit_list_from_path
 # %%
 
 
-def make_onion_invtable(habit, psd, coefs_exp=None):
+def make_onion_invtable(habit, psd, coef_mgd=None):
     """
     Create a radar onion inversion table for the given habit and PSD.
     """
@@ -50,10 +50,10 @@ def make_onion_invtable(habit, psd, coefs_exp=None):
 
     elif psd == "Exponential":
         # Define an exponential PSD with varing lambda
-        if coefs_exp is None:
-            raise ValueError("coefs_exp must be provided for Exponential PSD")
-        n0 = coefs_exp.get("n0", 1e6) 
-        ga = coefs_exp.get("ga", 1) 
+        if coef_mgd is None:
+            raise ValueError("coef_mgd must be provided for Exponential PSD")
+        n0 = coef_mgd.get("n0", 1e6)
+        ga = coef_mgd.get("ga", 1)
         ea.scat_speciesMgdMass(ws, name, n0=n0, mu=0, la=-999, ga=ga)
 
     else:

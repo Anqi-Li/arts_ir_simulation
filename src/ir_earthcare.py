@@ -27,7 +27,7 @@ psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "Exponential"]
 
 
 # %%
-def cal_y_arts(ds_earthcare, habit_std, psd, coefs_exp=None):
+def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
     """Compute the brightness temperature for a given Earthcare dataset,
     habit and particle size distribution (PSD).
     Args:
@@ -123,7 +123,7 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coefs_exp=None):
     # % Set the cloud layer
     scat_species = ["FWC", "LWC"]  # Arbitrary names
     insert_bulkprop_from_earthcare(
-        ds_earthcare, ws, habit_std, psd, scat_species, coefs_exp=coefs_exp
+        ds_earthcare, ws, habit_std, psd, scat_species, coef_mgd=coef_mgd
     )
 
     # %
@@ -149,7 +149,7 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coefs_exp=None):
 
 
 def insert_bulkprop_from_earthcare(
-    ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"], coefs_exp=None
+    ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"], coef_mgd=None
 ):
     for i, species in enumerate(scat_species):
         ws.Append(ws.particle_bulkprop_names, species)
@@ -174,14 +174,15 @@ def insert_bulkprop_from_earthcare(
                 ea.scat_speciesFieldEtAl07(ws, species, regime="ML")
 
             elif psd == "Exponential":
-                if coefs_exp is None:
+                if coef_mgd is None:
                     raise ValueError(
                         "Please provide the coefficients for the exponential PSD."
                     )
-                n0 = coefs_exp.get("n0")
-                ga = coefs_exp.get("ga", 1)
+                n0 = coef_mgd.get("n0")
+                ga = coef_mgd.get("ga", 1)
+                mu = coef_mgd.get("mu", 0)
                 ea.scat_speciesMgdMass(
-                    ws, species, la=-999, mu=0, n0=n0, ga=ga, x_unit="dveq"
+                    ws, species, la=-999, mu=mu, n0=n0, ga=ga, x_unit="dveq"
                 )
 
             else:
@@ -420,19 +421,19 @@ if __name__ == "__main__":
     # )[f"onion_invtable_{habit_std}_{psd}"]
     if psd == "Exponential":
         # coefficients for the exponential PSD
-        coefs_exp = {
+        coef_mgd = {
             "n0": 1e10,  # Number concentration
             "ga": 1.5,  # Gamma parameter
         }
     else:
-        coefs_exp = None
+        coef_mgd = None
     ds_onion_invtable = get_ds_table(
         habit=habit_std,
         psd=psd,
         ws=make_onion_invtable(
             habit=habit_std,
             psd=psd,
-            coefs_exp=coefs_exp,
+            coef_mgd=coef_mgd,
         ),
     )
     # take an earthcare input dataset
@@ -444,17 +445,16 @@ if __name__ == "__main__":
 
     # put FWC
     ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
-    ds_earthcare_ = get_frozen_water_path(ds_earthcare_)
 
-    # remove clearsky profiles
-    # mask_low_fwc = (
-    #     ds_earthcare_["frozen_water_content"].sel(height_grid=slice(5e3, None)) == 0
-    # ).all(dim="height_grid")
-    # mask_cold_clouds = ds_earthcare_["pixel_values"] < 245  # K
-    # mask = np.logical_and(~mask_low_fwc, mask_cold_clouds)
-    mask = (
-        ds_earthcare_["frozen_water_path"] > 5  # kg/m^2 threshold for frozen water path
-    )
+    # remove some profiles
+    ds_earthcare_["reflectivity_integral_log10"] = (
+    ds_earthcare_["dBZ"]
+    .pipe(lambda x: 10 ** (x / 10))
+    .fillna(0)
+    .integrate("height_grid")
+    .pipe(np.log10)
+)
+    mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5
 
     if (~mask).all():
         print("All nrays are cleared sky. No computation needed.")
@@ -472,7 +472,7 @@ if __name__ == "__main__":
             ds_earthcare_subset.isel(nray=i),
             habit_std,
             psd,
-            coefs_exp=coefs_exp,
+            coef_mgd=coef_mgd,
         )
 
     y = []
