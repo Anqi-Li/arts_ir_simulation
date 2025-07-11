@@ -88,7 +88,7 @@ def make_onion_invtable(habit, psd, coef_mgd=None):
 
 
 # %% table in a data array and extrapolate to a wider dbz range
-def get_ds_table(habit, psd, ws):
+def ws_to_ds_table(habit, psd, ws):
     ds_table = xr.DataArray(
         name=f"onion_invtable_{habit}_{psd}",
         data=ws.onion_invtable.value[1].data,
@@ -109,9 +109,24 @@ def get_ds_table(habit, psd, ws):
     )
     ds_table["Temperature"].attrs["unit"] = "K"
     ds_table["dBZ"].attrs["unit"] = "dBZ"
+    ds_table.attrs["habit"] = habit
+    ds_table.attrs["psd"] = psd
     return ds_table
 
-
+def get_ds_onion_invtable(habit, psd, coef_mgd=None):
+    """
+    Create a data array with the onion inversion table for the given habit and PSD.
+    """
+    ds_onion_invtable = ws_to_ds_table(
+    habit=habit,
+    psd=psd,
+    ws=make_onion_invtable(
+        habit=habit,
+        psd=psd,
+        coef_mgd=coef_mgd,
+    ),
+)
+    return ds_onion_invtable
 # %%
 def plot_table(ds_table):
     plt.figure()
@@ -135,7 +150,7 @@ if __name__ == "__main__":
             ws = make_onion_invtable(habit, psd)
 
             # % Create the data array with the inversion table
-            ds_table = get_ds_table(habit, psd, ws)
+            ds_table = ws_to_ds_table(habit, psd, ws)
 
             # plot_table(ds_table)
 
@@ -148,31 +163,4 @@ if __name__ == "__main__":
                     "Temperature": {"dtype": "float32"},
                 },
             )
-    # %% take a sample earthcare dataset
-    # path_earthcare = "../data/earthcare/arts_x_data/"
-    # ds_earthcare = xr.open_dataset(path_earthcare + "arts_x_01162E.nc")
-
-    # %% interpolate the table to the earthcare dataset
-    # profile_fwc_log10 = ds_table.sel(radiative_properties="FWC").interp(
-    #     Temperature=ds_earthcare.temperature,
-    #     dBZ=ds_earthcare.dBZ,
-    # )
-
-    # fig, axes = plt.subplots(3,1, figsize=(12, 6), sharex=True, sharey=True)
-    # profile_fwc_log10.plot(
-    #     x="nray",
-    #     y="height_grid",
-    #     ax=axes[0],
-    # )
-
-    # ds_earthcare.dBZ.plot(
-    #     x="nray",
-    #     y="height_grid",
-    #     ax=axes[1],
-    # )
-
-    # ds_earthcare.temperature.where((ds_earthcare.temperature<273)&(ds_earthcare.temperature>180)).plot(
-    #     x="nray",
-    #     y="height_grid",
-    #     ax=axes[2],
-    # )
+   

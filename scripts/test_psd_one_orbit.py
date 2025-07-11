@@ -7,31 +7,55 @@ from plotting import plot_fwc_and_temperatures, plot_psd_mgd
 
 # %%
 habit = habit_std_list[0]
-psd = psd_list[0]
+psd = psd_list[-1]  # "exponential" is the last one in the list
 print(f"Selected habit: {habit}, PSD: {psd}")
 coef_mgd = (
     {
         "n0": 1e10,  # Number concentration
-        "ga": 1,  # Gamma parameter
+        "ga": 1.5,  # Gamma parameter
         "mu": 0,  # Default value for mu
     }
-    if psd == "exponential"
+    if psd == "Exponential"
     else None
 )
 
-ds_onion_invtable = get_ds_table(
+ds_onion_invtable = get_ds_onion_invtable(
     habit=habit,
     psd=psd,
-    ws=make_onion_invtable(
-        habit=habit,
-        psd=psd,
-        coef_mgd=coef_mgd,
-    ),
+    coef_mgd=coef_mgd,
 )
-# plot_table(ds_onion_invtable)
-# plot_psd_mgd(coefs_mgd=coef_mgd)
+plot_table(ds_onion_invtable)
+if psd == "Exponential":
+    plot_psd_mgd(coefs_mgd=coef_mgd)
 
+#%%
+from pyarts.workspace import Workspace
+x_scale = "linear"
+y_scale = "log"
+ws = Workspace(verbosity=0)
+ws.psd_size_grid = np.linspace(1e-6, 50e-6)
+ws.dpnd_data_dx_names = []
 
+# Setting all 4 parameters by GIN
+# This generates a single PSD
+ws.pnd_agenda_input_t = np.array([190])  # Not really used
+ws.pnd_agenda_input = np.array([[]])
+ws.pnd_agenda_input_names = []
+ws.psdDelanoeEtAl14(iwc=1, n0star=-999, Dm=-999)
+plt.figure()
+plt.plot(
+    ws.psd_size_grid.value * 1e6,
+    ws.psd_data.value[0],
+    label=psd,
+    c="C0",
+)
+plt.yscale(y_scale)
+plt.xscale(x_scale)
+plt.xlabel("Diameter (µm)")
+plt.ylabel("PSD (µm⁻¹ cm⁻³)")
+plt.legend()
+plt.grid()
+plt.show()
 # %% take an earthcare input dataset
 orbit_frame = "03872A"
 path_earthcare = os.path.join(
@@ -123,12 +147,12 @@ da_bulkprop = xr.concat(bulkprop, dim="nray")
 da_vmr = xr.concat(vmr, dim="nray")
 da_auxiliary = xr.concat(auxiliary, dim="nray")
 
-#%%
+# %%
 ds_arts = da_auxiliary.assign(
     arts=da_y,
     bulkprop=da_bulkprop,
     vmr=da_vmr,
-)#.assign(ds_earthcare_subset)
+)  # .assign(ds_earthcare_subset)
 if len(ds_arts.nray) > 1:
     ds_arts = ds_arts.sortby("time")
 

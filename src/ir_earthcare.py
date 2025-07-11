@@ -427,15 +427,11 @@ if __name__ == "__main__":
         }
     else:
         coef_mgd = None
-    ds_onion_invtable = get_ds_table(
-        habit=habit_std,
-        psd=psd,
-        ws=make_onion_invtable(
+    ds_onion_invtable = get_ds_onion_invtable(
             habit=habit_std,
             psd=psd,
             coef_mgd=coef_mgd,
-        ),
-    )
+        )
     # take an earthcare input dataset
     path_earthcare = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
@@ -448,12 +444,12 @@ if __name__ == "__main__":
 
     # remove some profiles
     ds_earthcare_["reflectivity_integral_log10"] = (
-    ds_earthcare_["dBZ"]
-    .pipe(lambda x: 10 ** (x / 10))
-    .fillna(0)
-    .integrate("height_grid")
-    .pipe(np.log10)
-)
+        ds_earthcare_["dBZ"]
+        .pipe(lambda x: 10 ** (x / 10))
+        .fillna(0)
+        .integrate("height_grid")
+        .pipe(np.log10)
+    )
     mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5
 
     if (~mask).all():
@@ -508,10 +504,14 @@ if __name__ == "__main__":
         bulkprop=da_bulkprop,
         vmr=da_vmr,
     )
-    if len(ds_arts.nray) > 1:
-        ds_arts = ds_arts.sortby("time")
 
-    ds_arts = xr.merge([ds_arts, ds_earthcare_subset])
+    ds_arts = xr.combine_by_coords(
+        [
+            ds_arts.set_xindex("time"),
+            ds_earthcare_subset.set_xindex("time"),
+        ],
+        join="inner",
+    )
 
     # %%
     # %% save to file
