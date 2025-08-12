@@ -1,4 +1,5 @@
 # %%
+import os
 from plotting import (
     load_arts_output_data,
     plot_arts_output_distribution,
@@ -27,7 +28,7 @@ for i in range(len(habit_std_list)):
         plot_arts_output_distribution(i, j, save=save)
         plt.close()  # Close the figure to avoid displaying it in the notebook
 
-# %% plot the results in time series
+# %% plot one orbit in time series
 orbit_frame = "04015F"
 habit_std, psd, orbits, ds_arts = load_arts_output_data(2, 2, orbit_frame=orbit_frame)
 ds_arts = get_cloud_top_T(ds_arts, fwc_threshold=2e-5)
@@ -133,6 +134,91 @@ if save:
         f'Figure is saved to "../data/figures/arts_output_series_{habit_std}_{psd}_{orbit_frame}.png"'
     )
 
+#%%
+orbit_frame = "04015F"
+
+habits = []
+psds = []
+arts_T = []
+arts_top_height = []
+# Loop through all habit_std and psd combinations
+j=0 # psd index
+for i in range(3): # habit index
+    habit_std, psd, orbits, ds_arts = load_arts_output_data(i, j, orbit_frame=orbit_frame)
+    ds_arts = get_cloud_top_height(ds_arts, fwc_threshold=2e-5)
+    habits.append(habit_std)
+    psds.append(psd)
+    arts_T.append(ds_arts['arts'].mean('f_grid'))
+    arts_top_height.append(ds_arts['cloud_top_height'])
+
+fig, axes = plt.subplots(3, 1, sharex=True, figsize=(6, 4), constrained_layout=True)
+
+# plot the dB profiles
+kwargs = dict(
+    y="height_grid",
+    x="nray",
+    add_colorbar=True,
+)
+ds_arts["dBZ"].where(ds_arts["dBZ"] > -30).plot(ax=axes[0], vmin=-30, vmax=30, **kwargs)
+
+ds_arts["surfaceElevation"].plot(
+    ax=axes[0],
+    x="nray",
+    label="surface elevation",
+    color="k",
+    lw=1,
+    ls="--",
+    add_legend=True,
+)
+arts_top_height[0].plot(
+    ax=axes[0],
+    x="nray",
+    label="cloud top height",
+    color="C1",
+    lw=1,
+    ls="--",
+    add_legend=True,
+)
+# axes[0].legend(loc="center left")
+
+# plot the brightness temperature
+kwargs = dict(ax=axes[1], x="nray", marker=".", markersize=0.8, ls="-", lw=0.5, ylim=[200, 280])
+[a.plot(label=f"{h}", **kwargs) for h, a in zip(habits, arts_T)]
+ds_arts["pixel_values"].plot(label="MSI", c='k', lw='0.7', **{k: v for k, v in kwargs.items() if k != 'lw'})
+
+# plot the difference between ARTS and MSI brightness temperature
+kwargs = dict(
+    ax=axes[2], x="nray", marker=".", markersize=0.8, ls="-", lw=0.5, ylim=[-25, 25]
+)
+[(a-ds_arts['pixel_values']).assign_attrs(units="K").plot(label=f"{h}", **kwargs) for h, a in zip(habits, arts_T)]
+axes[2].axhline(0, color="k", ls="--", lw=0.5)
+axes[2].legend(loc="center left", bbox_to_anchor=(0.02, 0.5))
+
+axes[0].set_title("Radar Reflectivity (dBZ)")
+axes[1].set_title("Brightness Temperature (mean over f_grid)")
+axes[2].set_title("Diff (ARTS - MSI)")
+axes[0].set_xlabel("")
+axes[1].set_xlabel("")
+axes[2].set_xlabel("")
+axes[0].set_ylabel("Height [m]")
+axes[1].set_ylabel("Height [m]")
+axes[2].set_ylabel("Height [m]")
+
+fig.suptitle(
+    f"""
+    {psd}
+    {len(ds_arts.nray)} profiles
+    """,
+)
+if save:
+    plt.savefig(
+        f"../data/figures/arts_output_simple_series_{habit_std}_{psd}_{orbit_frame}.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    print(
+        f'Figure is saved to "../data/figures/arts_output_simple_series_{habit_std}_{psd}_{orbit_frame}.png"'
+    )
 # %% groupby latitude bins
 habit_std, psd, orbits, ds_arts = load_arts_output_data(2, 2)
 ds_arts = get_cloud_top_T(ds_arts, fwc_threshold=1e-5)
