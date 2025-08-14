@@ -187,17 +187,16 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
 # %%
 if __name__ == "__main__":
 
-    # # take system arguments to select habit, psd and orbit frame
-    # if len(argv) == 4:
-    #     i = int(argv[1])
-    #     j = int(argv[2])
-    #     orbit_frame = argv[3]
-    # else:
-    #     raise ValueError(
-    #         "Please provide habit and psd indices as command line arguments."
-    #     )
-    i, j = 0, 0
-    orbit_frame = "03872A"
+    # take system arguments to select habit, psd and orbit frame
+    if len(argv) == 4:
+        i = int(argv[1])
+        j = int(argv[2])
+        orbit_frame = argv[3]
+    else:
+        raise ValueError(
+            "Please provide habit and psd indices as command line arguments."
+        )
+    
     # %% choose invtable
     habit_std = habit_std_list[i]  # Habit to use
     psd = psd_list[j]  # PSD to use

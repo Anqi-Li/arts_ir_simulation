@@ -25,7 +25,7 @@ while len(log_files) > 4:  # will become 5 after this run
 def run_arts(orbit, i, j):
     command = [
         "python",
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), "src/aws_earthcare.py"),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "src/earthcare_aws.py"),
         str(i),
         str(j),
         orbit,
