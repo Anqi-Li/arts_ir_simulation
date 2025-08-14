@@ -12,6 +12,7 @@ from easy_arts.data_model import (
     CloudboxOption,
     SpectralRegion,
 )
+from physics.constants import DENSITY_H2O_LIQUID
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from onion_table import *
 
@@ -149,7 +150,7 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
 
 def insert_bulkprop_from_earthcare(
-    ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"], coef_mgd=None
+    ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"], coef_mgd=None, habit_pingyang=True,
 ):
     for i, species in enumerate(scat_species):
         ws.Append(ws.particle_bulkprop_names, species)
@@ -159,7 +160,7 @@ def insert_bulkprop_from_earthcare(
             wsv.particle_bulkprop_fieldInsert(ws, profile_fwc, i)
             ea.scat_data_rawAppendStdHabit(
                 ws,
-                habit=map_habit[habit_std],
+                habit=map_habit[habit_std] if habit_pingyang else habit_std,
                 size_step=4,  # skip some particle sizes
             )
 
@@ -240,26 +241,41 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
     else:
         ws.z_surface = ds_earthcare["height_grid"].min().data.reshape(1, 1)
 
-    vmr_h2o = ds_earthcare["h2o_volume_mixing_ratio"].data.reshape(-1, 1, 1)
-    vmr_co2 = 427.53e-6 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
-    vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
-    vmr_o3 = (
-        28.9644
-        / 47.9982
-        * ds_earthcare["ozone_mass_mixing_ratio"].data.reshape(-1, 1, 1)
-    )
     vmr_field_stack = []
     for s in ws.abs_species.value:
         s = str(s).split("-")[0]
         if s == "H2O":
+            vmr_h2o = ds_earthcare["h2o_volume_mixing_ratio"].data.reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_h2o)
         elif s == "CO2":
+            vmr_co2 = 427.53e-6 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_co2)
         elif s == "N2O":
+            vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_n2o)
         elif s == "O3":
+            vmr_o3 = (
+                28.9644
+                / 47.9982
+                * ds_earthcare["ozone_mass_mixing_ratio"]
+                .fillna(0)
+                .data.reshape(-1, 1, 1)
+            )
             vmr_field_stack.append(vmr_o3)
+        elif s == "O2":
+            vmr_o2 = 0.2095 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
+            vmr_field_stack.append(vmr_o2)
+        elif s == "N2":
+            vmr_n2 = 0.7809 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
+            vmr_field_stack.append(vmr_n2)
+        elif s == "liquidcloud":
+            vmr_lwc = (
+                ds_earthcare["cloud_liquid_water_content"].data.reshape(-1, 1, 1)
+                / DENSITY_H2O_LIQUID
+            )
+            vmr_field_stack.append(vmr_lwc)
         else:
+            print(s)
             raise (f"Absorption species {s} is not implemented")
     ws.vmr_field = np.stack(vmr_field_stack)
     return
