@@ -2,7 +2,7 @@
 import numpy as np
 
 from onion_table import *
-from ir_earthcare import *
+from earthcare_ir import *
 from plotting import plot_fwc_and_temperatures, plot_psd_mgd
 
 # %%

@@ -68,7 +68,7 @@ if __name__ == "__main__":
 
     # f_grid_kayser = np.linspace(800, 950, 500)  # Kayser cm-1
     # f_grid = pyarts.arts.convert.kaycm2freq(f_grid_kayser)  # Convert to Hz
-    wavelen_grid = np.linspace(11.25e-6, 10.35e-6, 50)  # Wavelength in meters in descending order
+    wavelen_grid = np.linspace(11.25e-6, 10.35e-6, 100)  # Wavelength in meters in descending order
     f_grid = pyarts.arts.convert.wavelen2freq(wavelen_grid)  # Convert to Hz
     p_grid = np.logspace(np.log10(1050e2), np.log10(10e2), 150)  # Pa
     abs_species = [
@@ -76,7 +76,7 @@ if __name__ == "__main__":
         # "O3",
         "CO2, CO2-CKDMT252",
         # "CH4",
-        "N2O",
+        # "N2O",
     ]
     start = time.time()
     create_and_save_abs_lookup(
@@ -87,7 +87,7 @@ if __name__ == "__main__":
         h2o_perturbations=h2o_perturbations,
         datapath='/home/anqil/arts_ir_simulation/data/lookup_tables',
         filename="abs_table_{}_{}.xml".format(
-            "Earthcare_TIR2",
+            "Earthcare_TIR2_dense_f_grid",
             current_time,
         ).replace(" ", "_"),
     )

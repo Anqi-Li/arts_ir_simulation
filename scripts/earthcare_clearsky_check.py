@@ -1,5 +1,5 @@
 # %%
-from ir_earthcare import *
+from earthcare_ir import *
 from onion_table import *
 # %%
 i, j = 0, 0

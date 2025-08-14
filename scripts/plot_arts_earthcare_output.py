@@ -9,7 +9,7 @@ import xarray as xr
 import numpy as np
 import matplotlib.pyplot as plt
 import glob
-from ir_earthcare import habit_std_list, psd_list, get_cloud_top_height, get_cloud_top_T
+from earthcare_ir import habit_std_list, psd_list, get_cloud_top_height, get_cloud_top_T
 
 # ignore invalid value warnings
 import warnings

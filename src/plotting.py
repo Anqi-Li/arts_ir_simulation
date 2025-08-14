@@ -1,11 +1,11 @@
 # %%
 from cycler import cycler
-from ir_earthcare import get_cloud_top_T
+from earthcare_ir import get_cloud_top_T
 from pyarts.workspace import Workspace
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import binned_statistic
-from ir_earthcare import habit_std_list, psd_list
+from earthcare_ir import habit_std_list, psd_list
 import xarray as xr
 import glob
 

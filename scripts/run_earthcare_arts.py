@@ -3,7 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 import glob
-from ir_earthcare import habit_std_list, psd_list
+from earthcare_ir import habit_std_list, psd_list
 
 log_dir = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
@@ -13,19 +13,19 @@ log_dir = os.path.join(
 os.makedirs(log_dir, exist_ok=True)
 
 # Create a new log file with timestamp
-log_path = os.path.join(log_dir, f"run_earthcare_ir_{datetime.now():%Y%m%d_%H%M%S}.log")
+log_path = os.path.join(log_dir, f"run_earthcare_aws_{datetime.now():%Y%m%d_%H%M%S}.log")
 
 # Keep only the 5 most recent log files
-log_files = sorted(glob.glob(os.path.join(log_dir, "run_earthcare_ir_*.log")))
+log_files = sorted(glob.glob(os.path.join(log_dir, "run_earthcare_aws_*.log")))
 while len(log_files) > 4:  # will become 5 after this run
     os.remove(log_files[0])
-    log_files = sorted(glob.glob(os.path.join(log_dir, "run_earthcare_ir_*.log")))
+    log_files = sorted(glob.glob(os.path.join(log_dir, "run_earthcare_aws_*.log")))
 
 
-def run_earthcare_ir(orbit, i, j):
+def run_arts(orbit, i, j):
     command = [
         "python",
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), "src/ir_earthcare.py"),
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "src/aws_earthcare.py"),
         str(i),
         str(j),
         orbit,
@@ -44,7 +44,7 @@ with open(log_path, "w") as logfile:
         for i in range(len(habit_std_list)):
             for j in range(len(psd_list)):
                 try:
-                    run_earthcare_ir(orbit, i, j)
+                    run_arts(orbit, i, j)
                     print(f"Success for orbit {orbit}, habit {i}, psd {j}")
                 except subprocess.CalledProcessError as e:
                     logfile.write(f"Failed for orbit {orbit}, habit {i}, psd {j}: {e}\n")
