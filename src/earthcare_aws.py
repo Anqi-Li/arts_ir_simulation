@@ -272,7 +272,7 @@ if __name__ == "__main__":
     vmr = []
     auxiliary = []
 
-    with ProcessPoolExecutor(max_workers=35) as executor:
+    with ProcessPoolExecutor(max_workers=32) as executor:
         futures = [
             executor.submit(process_nray, i)
             for i in range(len(ds_earthcare_subset.nray))
