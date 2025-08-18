@@ -120,6 +120,19 @@ def plot_fwc_and_temperatures(
     return fig, ax
 
 
+def plot_dBZ_IR(ds):
+    fig, axes = plt.subplots(2, 1, sharex=True, constrained_layout=True)
+    ds.surfaceElevation.plot(ax=axes[0], label="Surface Elevation", c="k", ls="--")
+    ds.dBZ.plot(ax=axes[0], x="nray", vmin=-30, vmax=30, cmap="viridis")
+    ds.arts.mean("f_grid").plot(ax=axes[1], label="ARTS")
+    ds.pixel_values.plot(ax=axes[1], label="MSI")
+    axes[0].set_ylabel("z [m]")
+    axes[0].legend(loc="upper left")
+    axes[1].legend(loc="upper left")
+
+    return fig, axes
+
+
 # Calculate conditional probability
 def calculate_conditional_probabilities(
     y_true, y_pred, bin_edges=np.arange(180, 280, 2)
@@ -181,6 +194,227 @@ def plot_conditional_panel(
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
     return c
+
+
+def extract_outliers_from_diagonal(
+    y_true,
+    y_pred,
+    threshold_method="absolute",
+    threshold_value=10.0,
+    percentile_threshold=95,
+    return_indices=False,
+):
+    """
+    Extract data points that are far from the diagonal line (y_true = y_pred).
+
+    Parameters:
+    -----------
+    y_true : array-like
+        True values
+    y_pred : array-like
+        Predicted values
+    threshold_method : str
+        Method to determine outliers: 'absolute', 'percentile', or 'std'
+        - 'absolute': Use absolute difference threshold
+        - 'percentile': Use percentile of residuals
+        - 'std': Use standard deviation threshold
+    threshold_value : float
+        Threshold value (interpretation depends on method)
+        - For 'absolute': absolute difference threshold
+        - For 'std': number of standard deviations
+    percentile_threshold : float
+        Percentile threshold (used when method='percentile')
+    return_indices : bool
+        If True, also return the indices of outlier points
+
+    Returns:
+    --------
+    outlier_dict : dict
+        Dictionary containing outlier information:
+        - 'y_true_outliers': true values of outliers
+        - 'y_pred_outliers': predicted values of outliers
+        - 'residuals': residuals of outliers (y_pred - y_true)
+        - 'abs_residuals': absolute residuals of outliers
+        - 'indices': indices of outliers (if return_indices=True)
+        - 'threshold_used': actual threshold value used
+        - 'n_outliers': number of outliers found
+        - 'outlier_fraction': fraction of data that are outliers
+    """
+
+    # Convert to numpy arrays and flatten
+    y_true = np.array(y_true).flatten()
+    y_pred = np.array(y_pred).flatten()
+
+    # Remove NaN values
+    valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred))
+    y_true_clean = y_true[valid_mask]
+    y_pred_clean = y_pred[valid_mask]
+
+    # Calculate residuals (difference from diagonal)
+    residuals = y_true_clean - y_pred_clean
+    abs_residuals = np.abs(residuals)
+
+    # Determine threshold based on method
+    if threshold_method == "absolute":
+        threshold = threshold_value
+        outlier_mask = abs_residuals > threshold
+    elif threshold_method == "percentile":
+        threshold = np.nanpercentile(abs_residuals, percentile_threshold)
+        outlier_mask = abs_residuals > threshold
+    elif threshold_method == "std":
+        mean_residual = np.nanmean(abs_residuals)
+        std_residual = np.nanstd(abs_residuals)
+        threshold = mean_residual + threshold_value * std_residual
+        outlier_mask = abs_residuals > threshold
+    else:
+        raise ValueError("threshold_method must be 'absolute', 'percentile', or 'std'")
+
+    # Extract outliers
+    y_true_outliers = y_true_clean[outlier_mask]
+    y_pred_outliers = y_pred_clean[outlier_mask]
+    residuals_outliers = residuals[outlier_mask]
+    abs_residuals_outliers = abs_residuals[outlier_mask]
+
+    # Create result dictionary
+    result = {
+        "y_true_outliers": y_true_outliers,
+        "y_pred_outliers": y_pred_outliers,
+        "residuals": residuals_outliers,
+        "abs_residuals": abs_residuals_outliers,
+        "threshold_used": threshold,
+        "n_outliers": len(y_true_outliers),
+        "outlier_fraction": len(y_true_outliers) / len(y_true_clean),
+        "threshold_method": threshold_method,
+    }
+
+    if return_indices:
+        # Get original indices (accounting for removed NaN values)
+        valid_indices = np.where(valid_mask)[0]
+        outlier_indices = valid_indices[outlier_mask]
+        result["indices"] = outlier_indices
+
+    return result
+
+
+def plot_outliers_analysis(
+    y_true,
+    y_pred,
+    threshold_method="absolute",
+    threshold_value=10.0,
+    percentile_threshold=95,
+    bin_edges=np.arange(180, 280, 2),
+    figsize=(15, 5),
+):
+    """
+    Create a comprehensive plot showing outliers analysis.
+
+    Parameters:
+    -----------
+    y_true, y_pred : array-like
+        True and predicted values
+    threshold_method, threshold_value, percentile_threshold :
+        Parameters for outlier detection (see extract_outliers_from_diagonal)
+    bin_edges : array-like
+        Bin edges for histogram
+    figsize : tuple
+        Figure size
+
+    Returns:
+    --------
+    fig, axes : matplotlib objects
+    outliers : dict
+        Result from extract_outliers_from_diagonal
+    """
+
+    # Extract outliers
+    outliers = extract_outliers_from_diagonal(
+        y_true,
+        y_pred,
+        threshold_method,
+        threshold_value,
+        percentile_threshold,
+        return_indices=True,
+    )
+
+    # Create subplots
+    fig, axes = plt.subplots(1, 3, figsize=figsize, constrained_layout=True)
+
+    # Convert to clean arrays for plotting
+    y_true_flat = np.array(y_true).flatten()
+    y_pred_flat = np.array(y_pred).flatten()
+    valid_mask = ~(np.isnan(y_true_flat) | np.isnan(y_pred_flat))
+    y_true_clean = y_true_flat[valid_mask]
+    y_pred_clean = y_pred_flat[valid_mask]
+
+    # Plot 1: 2D histogram with outliers highlighted
+    c = plot_conditional_panel(
+        axes[0],
+        y_true,
+        y_pred,
+        bin_edges,
+        title="Conditional P(Pred|True) with Outliers",
+        show_mbe=True,
+    )
+    axes[0].scatter(
+        outliers["y_true_outliers"],
+        outliers["y_pred_outliers"],
+        c="red",
+        s=10,
+        alpha=0.6,
+        label=f'Outliers (n={outliers["n_outliers"]})',
+    )
+
+    axes[0].legend()
+
+    # Plot 2: Residuals distribution
+    all_residuals = y_true_clean - y_pred_clean
+    axes[1].hist(all_residuals, bins=50, alpha=0.7, density=True, label="All residuals")
+    axes[1].hist(
+        outliers["residuals"],
+        bins=50,
+        alpha=0.7,
+        density=True,
+        color="red",
+        label="Outlier residuals",
+    )
+    axes[1].axvline(
+        outliers["threshold_used"],
+        color="red",
+        linestyle="--",
+        label=f'Threshold = {outliers["threshold_used"]:.1f}',
+    )
+    axes[1].axvline(-outliers["threshold_used"], color="red", linestyle="--")
+    axes[1].set_xlabel("Residuals (True - Predicted) [K]")
+    axes[1].set_ylabel("Density")
+    axes[1].set_title("Residuals Distribution")
+    axes[1].legend()
+
+    # Plot 3: Outlier characteristics
+    axes[2].scatter(
+        outliers["y_true_outliers"], outliers["abs_residuals"], c="red", alpha=0.6, s=15
+    )
+    axes[2].axhline(
+        outliers["threshold_used"],
+        color="red",
+        linestyle="--",
+        label=f'Threshold = {outliers["threshold_used"]:.1f}',
+    )
+    axes[2].set_xlabel("True [K]")
+    axes[2].set_ylabel("Absolute Residuals [K]")
+    axes[2].set_title("Outlier Magnitude vs True Value")
+    axes[2].legend()
+
+    # Add summary text
+    summary_text = f"""
+    Outlier Analysis Summary:
+    Method: {outliers['threshold_method']}
+    Threshold: {outliers['threshold_used']:.2f}
+    Outliers found: {outliers['n_outliers']} ({outliers['outlier_fraction']:.1%})
+    Max absolute residual: {np.max(outliers['abs_residuals']):.1f} K"""
+
+    fig.suptitle(summary_text, fontsize=10, y=0.02, ha="left", x=0.02)
+
+    return fig, axes, outliers
 
 
 # %% read output files
