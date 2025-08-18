@@ -19,18 +19,29 @@ warnings.filterwarnings(
 )
 save = False
 
+file_pattern="../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc",
 
 # %% Plot total distribution of ARTS output
 
-# plot_arts_output_distribution(habit_std_idx=0, psd_idx=0, save=False)
-for i in range(len(habit_std_list)):
-    for j in range(len(psd_list)):
-        plot_arts_output_distribution(i, j, save=save)
-        plt.close()  # Close the figure to avoid displaying it in the notebook
+plot_arts_output_distribution(
+    habit_std_idx=0,
+    psd_idx=0,
+    save=False,
+    file_pattern=file_pattern,
+)
+# for i in range(len(habit_std_list)):
+#     for j in range(len(psd_list)):
+#         plot_arts_output_distribution(i, j, save=save)
+#         plt.close()  # Close the figure to avoid displaying it in the notebook
 
 # %% plot one orbit in time series
 orbit_frame = "04015F"
-habit_std, psd, orbits, ds_arts = load_arts_output_data(2, 2, orbit_frame=orbit_frame)
+habit_std, psd, orbits, ds_arts = load_arts_output_data(
+    2,
+    2,
+    orbit_frame=orbit_frame,
+    file_pattern=file_pattern,
+)
 ds_arts = get_cloud_top_T(ds_arts, fwc_threshold=2e-5)
 
 fig, axes = plt.subplots(5, 1, sharex=True, figsize=(10, 8), constrained_layout=True)
@@ -134,7 +145,7 @@ if save:
         f'Figure is saved to "../data/figures/arts_output_series_{habit_std}_{psd}_{orbit_frame}.png"'
     )
 
-#%%
+# %%
 orbit_frame = "04015F"
 
 habits = []
@@ -142,14 +153,16 @@ psds = []
 arts_T = []
 arts_top_height = []
 # Loop through all habit_std and psd combinations
-j=0 # psd index
-for i in range(3): # habit index
-    habit_std, psd, orbits, ds_arts = load_arts_output_data(i, j, orbit_frame=orbit_frame)
+j = 0  # psd index
+for i in range(3):  # habit index
+    habit_std, psd, orbits, ds_arts = load_arts_output_data(
+        i, j, orbit_frame=orbit_frame, file_pattern=file_pattern
+    )
     ds_arts = get_cloud_top_height(ds_arts, fwc_threshold=2e-5)
     habits.append(habit_std)
     psds.append(psd)
-    arts_T.append(ds_arts['arts'].mean('f_grid'))
-    arts_top_height.append(ds_arts['cloud_top_height'])
+    arts_T.append(ds_arts["arts"].mean("f_grid"))
+    arts_top_height.append(ds_arts["cloud_top_height"])
 
 fig, axes = plt.subplots(3, 1, sharex=True, figsize=(6, 4), constrained_layout=True)
 
@@ -182,15 +195,22 @@ arts_top_height[0].plot(
 # axes[0].legend(loc="center left")
 
 # plot the brightness temperature
-kwargs = dict(ax=axes[1], x="nray", marker=".", markersize=0.8, ls="-", lw=0.5, ylim=[200, 280])
+kwargs = dict(
+    ax=axes[1], x="nray", marker=".", markersize=0.8, ls="-", lw=0.5, ylim=[200, 280]
+)
 [a.plot(label=f"{h}", **kwargs) for h, a in zip(habits, arts_T)]
-ds_arts["pixel_values"].plot(label="MSI", c='k', lw='0.7', **{k: v for k, v in kwargs.items() if k != 'lw'})
+ds_arts["pixel_values"].plot(
+    label="MSI", c="k", lw="0.7", **{k: v for k, v in kwargs.items() if k != "lw"}
+)
 
 # plot the difference between ARTS and MSI brightness temperature
 kwargs = dict(
     ax=axes[2], x="nray", marker=".", markersize=0.8, ls="-", lw=0.5, ylim=[-25, 25]
 )
-[(a-ds_arts['pixel_values']).assign_attrs(units="K").plot(label=f"{h}", **kwargs) for h, a in zip(habits, arts_T)]
+[
+    (a - ds_arts["pixel_values"]).assign_attrs(units="K").plot(label=f"{h}", **kwargs)
+    for h, a in zip(habits, arts_T)
+]
 axes[2].axhline(0, color="k", ls="--", lw=0.5)
 axes[2].legend(loc="center left", bbox_to_anchor=(0.02, 0.5))
 
@@ -220,7 +240,7 @@ if save:
         f'Figure is saved to "../data/figures/arts_output_simple_series_{habit_std}_{psd}_{orbit_frame}.png"'
     )
 # %% groupby latitude bins
-habit_std, psd, orbits, ds_arts = load_arts_output_data(2, 2)
+habit_std, psd, orbits, ds_arts = load_arts_output_data(2, 2, file_pattern=file_pattern)
 ds_arts = get_cloud_top_T(ds_arts, fwc_threshold=1e-5)
 plot_cloud_top_T = False  # Set to False to plot ARTS brightness temperature instead
 

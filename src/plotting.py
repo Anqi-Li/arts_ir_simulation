@@ -419,7 +419,12 @@ def plot_outliers_analysis(
 
 # %% read output files
 def load_arts_output_data(
-    habit_std_idx, psd_idx, orbit_frame=None, n_files=None, random_seed=42
+    habit_std_idx,
+    psd_idx,
+    orbit_frame=None,
+    n_files=None,
+    file_pattern=None,
+    random_seed=42,
 ):
     habit_std = habit_std_list[habit_std_idx]
     psd = psd_list[psd_idx]
@@ -427,11 +432,16 @@ def load_arts_output_data(
     if orbit_frame is None:
         orbit_frame = "*"  # Use wildcard to match all orbit frames
 
-    pattern = (
-        f"../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
-        # f'/scratch/li/arts-earthcare/arts_output_data_old/cold_allsky_{habit_std}_{psd}_{orbit_frame}.nc'
-    )
-    matching_files = sorted(glob.glob(pattern))
+    if file_pattern is None:
+        raise ValueError("File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc")
+    else:
+        # Format the custom pattern with the available variables
+        file_pattern = file_pattern.format(
+            habit_std=habit_std,
+            psd=psd,
+            orbit_frame=orbit_frame,
+        )
+    matching_files = sorted(glob.glob(file_pattern))
     if n_files is not None and len(matching_files) > n_files:
         rng = np.random.default_rng(random_seed)
         matching_files = rng.choice(matching_files, size=n_files, replace=False)
@@ -448,8 +458,12 @@ def load_arts_output_data(
     return habit_std, psd, orbits, ds_arts
 
 
-def plot_arts_output_distribution(habit_std_idx, psd_idx, save=False, save_path=None):
-    habit_std, psd, orbits, ds_arts = load_arts_output_data(habit_std_idx, psd_idx)
+def plot_arts_output_distribution(
+    habit_std_idx, psd_idx, save=False, save_path=None, file_pattern=None
+):
+    habit_std, psd, orbits, ds_arts = load_arts_output_data(
+        habit_std_idx, psd_idx, file_pattern=file_pattern
+    )
 
     # Mask out low clouds
     ds_arts = get_cloud_top_T(ds_arts, fwc_threshold=5e-5)
