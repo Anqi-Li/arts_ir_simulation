@@ -41,7 +41,8 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
     # Download ARTS catalogs if they are not already present.
     pyarts.cat.download.retrieve()
-    ws.stdhabits_folder = "/scratch/li/arts-std-liquid-simlink"
+    ws.stdhabits_folder = "/scratch/patrick/Data/StandardHabits"
+    ws.SetNumberOfThreads(nthreads=1)
 
     ws.iy_main_agendaSet(option="Emission")
     ws.iy_surface_agendaSet(option="UseSurfaceRtprop")
@@ -196,7 +197,7 @@ if __name__ == "__main__":
         raise ValueError(
             "Please provide habit and psd indices as command line arguments."
         )
-    
+
     # %% choose invtable
     habit_std = habit_std_list[i]  # Habit to use
     psd = psd_list[j]  # PSD to use
@@ -205,7 +206,7 @@ if __name__ == "__main__":
 
     file_save_ncdf = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
-        f"data/earthcare/arts_output_aws_data/aws_5th_{habit_std}_{psd}_{orbit_frame}.nc",
+        f"data/earthcare/arts_output_aws_data/aws_2nd_{habit_std}_{psd}_{orbit_frame}.nc",
     )
 
     # %% check if the file already exists
@@ -235,27 +236,14 @@ if __name__ == "__main__":
         coef_mgd=coef_mgd,
     )
 
-    # put FWC
-    ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
-
-    # remove some profiles
-    ds_earthcare_["reflectivity_integral_log10"] = (
-        ds_earthcare_["dBZ"]
-        .pipe(lambda x: 10 ** (x / 10))
-        .fillna(0)
-        .integrate("height_grid")
-        .pipe(np.log10)
-    )
-    mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5  # arbitary chosen
-
-    if (~mask).all():
-        print("All nrays are cleared sky. No computation needed.")
-        sys.exit(0)
-
-    ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
-        nray=slice(None, None, 5),  # skip every xth ray to reduce computation time
+    
+    ds_earthcare_subset = ds_earthcare_.isel(
+        nray=slice(None, None, 2),  # skip every xth ray to reduce computation time
     )
     print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
+
+    # put FWC
+    ds_earthcare_subset = get_frozen_water_content(ds_onion_invtable, ds_earthcare_subset)
 
     # %% loop over nrays
     def process_nray(i):
