@@ -5,12 +5,12 @@ from plotting import (
     plot_outliers_analysis,
     load_arts_output_data,
     plot_dBZ_IR,
+    plot_dBZ_fwc_IR,
 )
 import cartopy.crs as ccrs
-import cartopy.feature as cfeature
 
 file_pattern = (
-    "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc",
+    "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
 )
 
 # %%
@@ -21,7 +21,7 @@ habit_std_idx = 0  # Change as needed
 psd_idx = 2  # Change as needed
 
 habit_std, psd, orbits, ds_arts = load_arts_output_data(
-    habit_std_idx, psd_idx, n_files=80, file_pattern=file_pattern
+    habit_std_idx, psd_idx, n_files=80, random_seed=42, file_pattern=file_pattern
 )  # Limit files for faster processing
 
 # Extract y_true and y_pred data
@@ -46,28 +46,28 @@ fig.suptitle(f"{habit_std}\n{psd}\n{len(ds_arts.nray)} profiles", fontsize=20, x
 plt.show()
 
 # %% Check dBZ profiles
-ds_inliners_subset = ds_arts.drop_isel(nray=outliers["indices"]).isel(nray=slice(200))
+ds_inliners_subset = ds_arts.drop_isel(nray=outliers["indices"]).isel(nray=slice(400))
 ds_outliers_neg = ds_arts.isel(
     nray=outliers["indices"][np.where(outliers["residuals"] < 0)]
-).isel(nray=slice(200))
+).isel(nray=slice(400))
 ds_outliers_pos = ds_arts.isel(
     nray=outliers["indices"][np.where(outliers["residuals"] > 0)]
-).isel(nray=slice(200))
+).isel(nray=slice(400))
 
-fig, axes = plot_dBZ_IR(ds_outliers_pos)
+fig, axes = plot_dBZ_fwc_IR(ds_outliers_pos)
 fig.suptitle("Outliers Positive")
 axes[0].legend().set_visible(False)
 plt.show()
 
-fig, axes = plot_dBZ_IR(ds_outliers_neg)
+fig, axes = plot_dBZ_fwc_IR(ds_outliers_neg)
 fig.suptitle("Outliers Negative")
 axes[0].legend().set_visible(False)
 plt.show()
 
-fig, axes = plot_dBZ_IR(ds_inliners_subset)
-fig.suptitle("Inliers Subset (200 samples)")
-axes[0].legend().set_visible(False)
-plt.show()
+# fig, axes = plot_dBZ_IR(ds_inliners_subset)
+# fig.suptitle("Inliers Subset (200 samples)")
+# axes[0].legend().set_visible(False)
+# plt.show()
 
 
 # %% check the geolocation of outliers

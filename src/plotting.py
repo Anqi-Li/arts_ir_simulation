@@ -133,6 +133,26 @@ def plot_dBZ_IR(ds):
     return fig, axes
 
 
+def plot_dBZ_fwc_IR(ds):
+    fig, axes = plt.subplots(3, 1, sharex=True, constrained_layout=True)
+    ds.surfaceElevation.plot(ax=axes[0], label="Surface Elevation", c="k", ls="--")
+    ds.dBZ.plot(ax=axes[0], x="nray", vmin=-30, vmax=30, cmap="viridis")
+    ds.frozen_water_content.pipe(np.log10).plot(
+        ax=axes[1],
+        x="nray",
+        vmin=-7,
+        vmax=-2,
+        cmap="viridis",
+        cbar_kwargs={"label": "FWC (log10 kg/m^3)"},
+    )
+    ds.arts.mean("f_grid").plot(ax=axes[2], label="ARTS")
+    ds.pixel_values.plot(ax=axes[2], label="MSI")
+    axes[0].set_ylabel("z [m]")
+    axes[0].legend(loc="upper left")
+    axes[2].legend(loc="upper left")
+    return fig, axes
+
+
 # Calculate conditional probability
 def calculate_conditional_probabilities(
     y_true, y_pred, bin_edges=np.arange(180, 280, 2)
@@ -433,7 +453,9 @@ def load_arts_output_data(
         orbit_frame = "*"  # Use wildcard to match all orbit frames
 
     if file_pattern is None:
-        raise ValueError("File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc")
+        raise ValueError(
+            "File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
+        )
     else:
         # Format the custom pattern with the available variables
         file_pattern = file_pattern.format(
