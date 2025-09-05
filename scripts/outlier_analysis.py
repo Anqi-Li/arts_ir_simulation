@@ -18,10 +18,10 @@ print("Loading ARTS output data...")
 
 # Load some example data
 habit_std_idx = 0  # Change as needed
-psd_idx = 2  # Change as needed
+psd_idx = 0  # Change as needed
 
 habit_std, psd, orbits, ds_arts = load_arts_output_data(
-    habit_std_idx, psd_idx, n_files=80, random_seed=42, file_pattern=file_pattern
+    habit_std_idx, psd_idx, n_files=10, random_seed=45, file_pattern=file_pattern
 )  # Limit files for faster processing
 
 # Extract y_true and y_pred data
@@ -54,20 +54,22 @@ ds_outliers_pos = ds_arts.isel(
     nray=outliers["indices"][np.where(outliers["residuals"] > 0)]
 ).isel(nray=slice(400))
 
-fig, axes = plot_dBZ_fwc_IR(ds_outliers_pos)
-fig.suptitle("Outliers Positive")
-axes[0].legend().set_visible(False)
-plt.show()
+plot=False
+if plot:
+    fig, axes = plot_dBZ_fwc_IR(ds_outliers_pos)
+    fig.suptitle("Outliers Positive")
+    axes[0].legend().set_visible(False)
+    plt.show()
 
-fig, axes = plot_dBZ_fwc_IR(ds_outliers_neg)
-fig.suptitle("Outliers Negative")
-axes[0].legend().set_visible(False)
-plt.show()
+    fig, axes = plot_dBZ_fwc_IR(ds_outliers_neg)
+    fig.suptitle("Outliers Negative")
+    axes[0].legend().set_visible(False)
+    plt.show()
 
-# fig, axes = plot_dBZ_IR(ds_inliners_subset)
-# fig.suptitle("Inliers Subset (200 samples)")
-# axes[0].legend().set_visible(False)
-# plt.show()
+    fig, axes = plot_dBZ_fwc_IR(ds_inliners_subset)
+    fig.suptitle("Inliers Subset (200 samples)")
+    axes[0].legend().set_visible(False)
+    plt.show()
 
 
 # %% check the geolocation of outliers
@@ -105,3 +107,11 @@ ax.legend()
 ax.set_title("MSI vs ARTS: Inliers and Outliers")
 plt.show()
 
+#%%
+orbit_frame=['03871C', '04358B', '05093E', '04701A','05128A','03871A','04025A','04247F','04299F','04738H','05093E']
+habit_std, psd, orbits, ds_arts = load_arts_output_data(
+    0, 0, n_files=10, random_seed=2, file_pattern=file_pattern
+)
+fig, ax = plot_dBZ_fwc_IR(ds_arts.sortby('time')) 
+ax[0].legend().set_visible(False)
+# %%

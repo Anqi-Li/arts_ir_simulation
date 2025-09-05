@@ -12,9 +12,7 @@ import glob
 # ignore warnings from divide by zero encountered in log10
 import warnings
 
-warnings.filterwarnings(
-    "ignore", category=RuntimeWarning, message="divide by zero encountered in log10"
-)
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero encountered in log10")
 
 
 # %%
@@ -65,9 +63,7 @@ def plot_fwc_and_temperatures(
     add_diff=False,
 ):
     if fwc_threshold is None and "cloud_top_T" not in ds:
-        raise ValueError(
-            "Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset."
-        )
+        raise ValueError("Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset.")
     if fwc_threshold is not None:
         ds = get_cloud_top_T(ds, fwc_threshold=fwc_threshold)
 
@@ -140,8 +136,8 @@ def plot_dBZ_fwc_IR(ds):
     ds.frozen_water_content.pipe(np.log10).plot(
         ax=axes[1],
         x="nray",
-        vmin=-7,
-        vmax=-2,
+        vmin=-6,
+        vmax=-3,
         cmap="viridis",
         cbar_kwargs={"label": "FWC (log10 kg/m^3)"},
     )
@@ -154,48 +150,32 @@ def plot_dBZ_fwc_IR(ds):
 
 
 # Calculate conditional probability
-def calculate_conditional_probabilities(
-    y_true, y_pred, bin_edges=np.arange(180, 280, 2)
-):
-    bin_means, _, binnumber = binned_statistic(
-        y_true, y_pred, statistic=np.nanmean, bins=bin_edges
-    )
-    bin_per90, _, _ = binned_statistic(
-        y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 90), bins=bin_edges
-    )
-    bin_per10, _, _ = binned_statistic(
-        y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 10), bins=bin_edges
-    )
+def calculate_conditional_probabilities(y_true, y_pred, bin_edges=np.arange(180, 280, 2)):
+    bin_means, _, binnumber = binned_statistic(y_true, y_pred, statistic=np.nanmean, bins=bin_edges)
+    bin_per90, _, _ = binned_statistic(y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 90), bins=bin_edges)
+    bin_per10, _, _ = binned_statistic(y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 10), bins=bin_edges)
 
-    h_joint_test_pred, _, _ = np.histogram2d(
-        y_true, y_pred, bins=bin_edges, density=True
-    )
+    h_joint_test_pred, _, _ = np.histogram2d(y_true, y_pred, bins=bin_edges, density=True)
     h_test, _ = np.histogram(y_true, bins=bin_edges, density=True)
     h_conditional = h_joint_test_pred / h_test.reshape(-1, 1)
     h_conditional_nan = np.where(h_conditional > 0, h_conditional, np.nan)
     return bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan
 
 
-def plot_conditional_panel(
-    ax, y_true, y_pred, bin_edges, title, vmin=0, vmax=0.14, show_mbe=False
-):
-    bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan = (
-        calculate_conditional_probabilities(
-            y_true=y_true, y_pred=y_pred, bin_edges=bin_edges
-        )
+def plot_conditional_panel(ax, y_true, y_pred, bin_edges, title, vmin=0, vmax=0.14, show_mbe=False):
+    bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan = calculate_conditional_probabilities(
+        y_true=y_true, y_pred=y_pred, bin_edges=bin_edges
     )
     bin_mid = (bin_edges[:-1] + bin_edges[1:]) / 2
     ax.plot(bin_mid, bin_means, label="Mean", c="k", marker=".")
     ax.plot(bin_mid, bin_per90, label="90th percentile", c="C0", marker=".")
     ax.plot(bin_mid, bin_per10, label="10th percentile", c="C0", marker=".")
-    c = ax.pcolormesh(
-        bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", vmin=vmin, vmax=vmax
-    )
+    c = ax.pcolormesh(bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", vmin=vmin, vmax=vmax)
     ax.plot(
         [bin_mid[0], bin_mid[-1]],
         [bin_mid[0], bin_mid[-1]],
         "r--",
-        label="True = Predicted",
+        label="True = Pred",
     )
     ax.legend(loc="lower right", fontsize=8, framealpha=0.5)
     ax.set_xlim(bin_edges[0], bin_edges[-1])
@@ -410,9 +390,7 @@ def plot_outliers_analysis(
     axes[1].legend()
 
     # Plot 3: Outlier characteristics
-    axes[2].scatter(
-        outliers["y_true_outliers"], outliers["abs_residuals"], c="red", alpha=0.6, s=15
-    )
+    axes[2].scatter(outliers["y_true_outliers"], outliers["abs_residuals"], c="red", alpha=0.6, s=15)
     axes[2].axhline(
         outliers["threshold_used"],
         color="red",
@@ -453,9 +431,7 @@ def load_arts_output_data(
         orbit_frame = "*"  # Use wildcard to match all orbit frames
 
     if file_pattern is None:
-        raise ValueError(
-            "File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
-        )
+        raise ValueError("File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc")
     else:
         # Format the custom pattern with the available variables
         file_pattern = file_pattern.format(
@@ -471,21 +447,14 @@ def load_arts_output_data(
     orbits = [o[-9:-3] for o in matching_files]
     print(f"Number of matching files: {len(matching_files)}")
 
-    datasets = [
-        xr.open_dataset(f, chunks="auto").assign_coords(orbit_frame=f[-9:-3])
-        for f in matching_files
-    ]
+    datasets = [xr.open_dataset(f, chunks="auto").assign_coords(orbit_frame=f[-9:-3]) for f in matching_files]
     ds_arts = xr.concat(datasets, dim="nray").sortby("profileTime")
 
     return habit_std, psd, orbits, ds_arts
 
 
-def plot_arts_output_distribution(
-    habit_std_idx, psd_idx, save=False, save_path=None, file_pattern=None
-):
-    habit_std, psd, orbits, ds_arts = load_arts_output_data(
-        habit_std_idx, psd_idx, file_pattern=file_pattern
-    )
+def plot_arts_output_distribution(habit_std_idx, psd_idx, save=False, save_path=None, file_pattern=None):
+    habit_std, psd, orbits, ds_arts = load_arts_output_data(habit_std_idx, psd_idx, file_pattern=file_pattern)
 
     # Mask out low clouds
     ds_arts = get_cloud_top_T(ds_arts, fwc_threshold=5e-5)
@@ -498,9 +467,7 @@ def plot_arts_output_distribution(
     mbe = np.nanmean(y_pred - y_true)
     bin_edges = np.arange(180, 280, 2)
 
-    fig, (ax0, ax1) = plt.subplots(
-        2, 1, height_ratios=[3, 1], sharex=True, figsize=(7, 7), constrained_layout=True
-    )
+    fig, (ax0, ax1) = plt.subplots(2, 1, height_ratios=[3, 1], sharex=True, figsize=(7, 7), constrained_layout=True)
 
     h_test, _ = np.histogram(y_true, bins=bin_edges, density=True)
 
@@ -539,9 +506,7 @@ def plot_arts_output_distribution(
     )
     if save:
         if save_path is None:
-            save_path = (
-                f"../data/figures/arts_output_distribution_{habit_std}_{psd}.png"
-            )
+            save_path = f"../data/figures/arts_output_distribution_{habit_std}_{psd}.png"
         plt.savefig(
             save_path,
             dpi=300,
