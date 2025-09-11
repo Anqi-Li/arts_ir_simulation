@@ -11,7 +11,7 @@ import pyarts.xml as xml
 import os
 import xgboost as xgb
 import xarray as xr
-from plotting import load_arts_output_data
+from plotting import load_arts_output_data, sci_formatter
 
 save = False
 file_pattern = "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
@@ -89,19 +89,6 @@ def plot_conditional_panel(
             bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
         )
     return c
-
-
-def sci_formatter(x, pos):
-    if x == 0:
-        return "0"
-    exp = int(np.floor(np.log10(abs(x))))
-    coeff = x / 10**exp
-    if abs(coeff - 1.0) < 1e-8:  # exact power of ten
-        return rf"$10^{{{exp}}}$"
-    else:
-        # show coeff × 10^{exp}; round coeff for readability
-        return rf"${coeff:.2g}\times10^{{{exp}}}$"
-
 
 def load_ml_statistics():
     model_tag = "all_orbits_20250101_20250501_seed42"
@@ -394,7 +381,7 @@ if save:
     save = False
 
 
-#%%
+#%% create sine wave
 # color = "#B23200FF"
 color = "#0083B2FF"
 x = np.linspace(0, 8 * np.pi, 400)
@@ -424,14 +411,14 @@ fig.savefig(
 
 
 # %% plot one orbit in time series
-orbit_frame = "04015F"
+orbit_frame = '04549D' #"04015F"#'04701A'#'03871C'#"04015F"
 
 habits = []
 psds = []
 arts_T = []
 arts_top_height = []
 # Loop through all habit_std and psd combinations
-i = 0  # habit index
+i = 2  # habit index
 for j in range(3):  # psd index
     habit_std, psd, orbits, ds_arts = load_arts_output_data(i, j, orbit_frame=orbit_frame, file_pattern=file_pattern)
     # ds_arts = get_cloud_top_height(ds_arts, fwc_threshold=2e-5)

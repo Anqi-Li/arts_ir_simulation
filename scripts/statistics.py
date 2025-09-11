@@ -1,10 +1,9 @@
 # %%
-import string
 from plotting import (
     load_arts_output_data,
-    plot_arts_output_distribution,
     plot_conditional_panel,
     calculate_conditional_probabilities,
+    sci_formatter,
 )
 import xarray as xr
 import numpy as np
@@ -18,11 +17,14 @@ import xgboost as xgb
 # ignore invalid value warnings
 import warnings
 
-warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value encountered in divide *")
+warnings.filterwarnings(
+    "ignore", category=RuntimeWarning, message="invalid value encountered in divide *"
+)
 save = False
 
-file_pattern = "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
-
+file_pattern = (
+    "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
+)
 
 
 # %% load all habit and/or psd arts data
@@ -34,7 +36,7 @@ for j in range(len(psd_list)):
                 i,
                 j,
                 file_pattern=file_pattern,
-                # n_files=100,  # test on small amount first
+                n_files=100,  # test on small amount first
             )
         )
 
@@ -48,7 +50,7 @@ for j in range(len(psd_list)):
         habit_std = habit_std_list[i]
         ds_arts = [d[-1] for d in data if d[0] == habit_std and d[1] == psd][0]
 
-        bins_fwc = np.logspace(-8, -2, 50)
+        bins_fwc = np.logspace(-6, -2, 50)
         hist_fwc, _ = np.histogram(
             ds_arts.frozen_water_content,
             bins=bins_fwc,
@@ -65,27 +67,35 @@ for j in range(len(psd_list)):
 
 ax.set_xscale("log")
 ax.set_yscale("log")
-ax.set_ylim([1e-2, 1e6])
+ax.set_ylim([1e3, 1e5])
 ax.set_xlabel("Frozen Water Content [kg/m³]")
 ax.set_ylabel("Probability Density")
-ax.legend(loc="lower left", framealpha=0.3)
-ax.set_title("FWC Distribution CPR - ARTS ")
+# ax.legend(loc="lower left", framealpha=0.3)
+ax.set_title("FWC Distribution")
 
 handles, labels = ax.get_legend_handles_labels()
-ax.legend(np.array(handles)[::3], np.array(labels)[::3], loc="lower left", framealpha=0.3)
+ax.legend(
+    np.array(handles)[::3], np.array(labels)[::3], loc="lower left", framealpha=0.3
+)
 
 if save:
-    plt.savefig(f"../data/figures/arts_output_fwc_distribution.png", dpi=1000, bbox_inches="tight")
+    plt.savefig(
+        f"../data/figures/arts_output_fwc_distribution.png",
+        dpi=1000,
+        bbox_inches="tight",
+    )
     print(f'Figure is saved to "../data/figures/arts_output_fwc_distribution.png"')
 
 # %% calculate bin statistics and conditional probabilities
 bin_means_, bin_per90_, bin_per10_, h_conditional_nan_ = [], [], [], []
 bin_edges = np.arange(180, 300, 5)
 for i in range(len(data)):
-    _, bin_means, bin_per90, bin_per10, _, h_conditional_nan = calculate_conditional_probabilities(
-        y_true=data[i][-1]["pixel_values"].values.flatten(),
-        y_pred=data[i][-1]["arts"].mean("f_grid").values.flatten(),
-        bin_edges=bin_edges,
+    _, bin_means, bin_per90, bin_per10, _, h_conditional_nan = (
+        calculate_conditional_probabilities(
+            y_true=data[i][-1]["pixel_values"].values.flatten(),
+            y_pred=data[i][-1]["arts"].mean("f_grid").values.flatten(),
+            bin_edges=bin_edges,
+        )
     )
     bin_means_.append(bin_means)
     bin_per10_.append(bin_per10)
@@ -110,18 +120,103 @@ for i in range(len(data)):
 save = False
 
 # %% Plot total distribution of ARTS output
+# load all pre caculated statistics
+bin_edges_, bin_means_, bin_per90_, bin_per10_, h_conditional_nan_ = [], [], [], [], []
+psds, habits = [], []
+for i in range(len(habit_std_list)):
+    for j in range(len(psd_list)):
+        psd, habit = psd_list[j], habit_std_list[i]
+        print(psd, habit)
+        psds.append(psd)
+        habits.append(habit)
+        stats_dict = np.load(
+            f"/home/anqil/arts_ir_simulation/data/earthcare/arts_output_statistics/conditional_probabilities_{psd}_{habit}.npy",
+            allow_pickle=True,
+        ).item()
+        bin_edges_.append(stats_dict["bin_edges"])
+        bin_means_.append(stats_dict["bin_means"])
+        bin_per90_.append(stats_dict["bin_per90"])
+        bin_per10_.append(stats_dict["bin_per10"])
+        h_conditional_nan_.append(stats_dict["h_conditional_nan"])
 
-plot_arts_output_distribution(
-    habit_std_idx=0,
-    psd_idx=0,
-    save=False,
-    file_pattern=file_pattern,
+
+# plot the statitstics
+def plot_conditional_panel(
+    ax,
+    bin_edges,
+    bin_means,
+    bin_per90,
+    bin_per10,
+    h_conditional_nan,
+    title,
+    norm,
+):
+
+    bin_mid = (bin_edges[:-1] + bin_edges[1:]) / 2
+    (l_mean,) = ax.plot(bin_mid, bin_means, label="Mean", c="lightgrey", ls="-", lw=3)
+    (l_per90,) = ax.plot(
+        bin_mid, bin_per90, label="90th percentile", c="lightgrey", ls=":", lw=2
+    )
+    (l_per10,) = ax.plot(
+        bin_mid, bin_per10, label="10th percentile", c="lightgrey", ls=":", lw=2
+    )
+    c = ax.pcolormesh(
+        bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", norm=norm
+    )
+    ax.plot(
+        [bin_mid[0], bin_mid[-1]],
+        [bin_mid[0], bin_mid[-1]],
+        "r--",
+        label="True = Pred",
+    )
+    ax.legend(
+        [l_mean, l_per90],
+        ["Mean", "P10/P90"],
+        loc="lower right",
+        fontsize=8,
+        framealpha=1,
+        # facecolor="lightgrey",
+    )
+    ax.set_xlim(bin_edges[0], bin_edges[-1])
+    ax.set_ylim(bin_edges[0], bin_edges[-1])
+    ax.set_title(title)
+
+    return ax
+
+bin_edges = bin_edges_[0]
+vmin = max(1e-6, np.nanmin(h_conditional_nan_))
+vmax = np.nanmax(h_conditional_nan_)
+norm = LogNorm(vmin=vmin, vmax=vmax)
+fig, ax = plt.subplots(3, 3, figsize=(10, 10), sharex=True, sharey=True, constrained_layout=True)
+for i in range(len(h_conditional_nan_)):
+    psd = psds[i].replace("Exponential", "Mod.Gamma")
+    habit = habits[i]
+    plot_conditional_panel(
+        ax.flatten()[i],
+        bin_edges,
+        bin_means_[i],
+        bin_per90_[i],
+        bin_per10_[i],
+        h_conditional_nan_[i],
+        norm=norm,
+        title=f"{psd}\n{habit}",
+    )
+    ax.flatten()[i].legend().set_visible(False)
+
+    if i in [0, 3, 6]:
+        ax.flatten()[i].set_ylabel("Predicted [K]")
+    if i in [6, 7, 8]:
+        ax.flatten()[i].set_xlabel("True [K]")
+cbar = plt.colorbar(
+    ax.flatten()[0].collections[0],
+    ax=ax,
+    orientation="vertical",
+    label="P (Predicted | True)",
+    aspect=40,
 )
-# for i in range(len(habit_std_list)):
-#     for j in range(len(psd_list)):
-#         plot_arts_output_distribution(i, j, save=save)
-#         plt.close()  # Close the figure to avoid displaying it in the notebook
-
+cbar.locator = LogLocator(base=10)
+cbar.update_ticks()
+cbar.formatter = FuncFormatter(sci_formatter)
 
 # %% groupby latitude bins
 # habit_std, psd, orbits, ds_arts = load_arts_output_data(2, 2, file_pattern=file_pattern)
