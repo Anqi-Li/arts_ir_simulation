@@ -11,84 +11,13 @@ import pyarts.xml as xml
 import os
 import xgboost as xgb
 import xarray as xr
-from plotting import load_arts_output_data, sci_formatter
+from plotting import load_arts_output_data, sci_formatter, load_ml_model_and_predict, plot_conditional_panel
 
 save = False
 file_pattern = "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
 
 # %%
-def load_ml_model_and_predict(ds_arts):
-    # Load ML model
-    model_tag = "all_orbits_20250101_20250501_seed42"
-    model = xgb.Booster()
-    model.load_model(f"/home/anqil/earthcare/data/xgb_regressor_{model_tag}.json")
-    print("Model loaded from file")
 
-    # construct training data and make prediction
-    orbit_frame = ds_arts.orbit_frame.data.item()
-    path_to_data = f"/home/anqil/earthcare/data/training_data/training_data_{orbit_frame}.nc"
-    ds = xr.open_dataset(path_to_data)
-    ds = ds.set_xindex("time").sel(time=ds_arts.time)
-    y_pred_ml = model.predict(xgb.DMatrix(ds.x))[:, 1]  # select only channel 1
-    return y_pred_ml
-
-def plot_conditional_panel(
-    ax,
-    bin_edges,
-    bin_means,
-    bin_per90,
-    bin_per10,
-    h_conditional_nan,
-    title,
-    norm,
-    show_mbe=False,
-    mbe=None,
-):
-
-    bin_mid = (bin_edges[:-1] + bin_edges[1:]) / 2
-    (l_mean,) = ax.plot(bin_mid, bin_means, label="Mean", c="lightgrey", ls="-", lw=3)
-    (l_per90,) = ax.plot(
-        bin_mid, bin_per90, label="90th percentile", c="lightgrey", ls=":", lw=2
-    )
-    (l_per10,) = ax.plot(
-        bin_mid, bin_per10, label="10th percentile", c="lightgrey", ls=":", lw=2
-    )
-    c = ax.pcolormesh(
-        bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", norm=norm
-    )
-    ax.plot(
-        [bin_mid[0], bin_mid[-1]],
-        [bin_mid[0], bin_mid[-1]],
-        "r--",
-        label="True = Pred",
-    )
-    ax.legend(
-        [l_mean, l_per90],
-        ["Mean", "P10/P90"],
-        loc="lower right",
-        fontsize=8,
-        framealpha=1,
-        # facecolor="lightgrey",
-    )
-    ax.set_xlim(bin_edges[0], bin_edges[-1])
-    ax.set_ylim(bin_edges[0], bin_edges[-1])
-    ax.set_xlabel("True [K]")
-    ax.set_ylabel("Predicted [K]")
-    ax.set_title(f"{title}")
-    if show_mbe:
-        if mbe is not None:
-            pass
-        else:
-            raise ValueError("mbe must be provided if show_mbe is True")
-        ax.text(
-            250,
-            250,
-            f"Mean Bias Error:\n{mbe:.2f} K",
-            fontsize=11,
-            verticalalignment="top",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
-        )
-    return c
 
 def load_ml_statistics():
     model_tag = "all_orbits_20250101_20250501_seed42"

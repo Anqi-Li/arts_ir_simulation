@@ -1,6 +1,7 @@
 # %%
 from cycler import cycler
 from earthcare_ir import get_cloud_top_T
+from matplotlib.colors import LogNorm
 from pyarts.workspace import Workspace
 import numpy as np
 import matplotlib.pyplot as plt
@@ -195,21 +196,29 @@ def calculate_conditional_probabilities(
     return bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan
 
 
-# TODO make plotting function seperated from the calculation function
 def plot_conditional_panel(
-    ax, y_true, y_pred, bin_edges, title, vmin=0, vmax=0.14, show_mbe=False
+    ax,
+    bin_edges,
+    bin_means,
+    bin_per90,
+    bin_per10,
+    h_conditional_nan,
+    title,
+    norm,
+    show_mbe=False,
+    mbe=None,
 ):
-    bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan = (
-        calculate_conditional_probabilities(
-            y_true=y_true, y_pred=y_pred, bin_edges=bin_edges
-        )
-    )
+
     bin_mid = (bin_edges[:-1] + bin_edges[1:]) / 2
-    ax.plot(bin_mid, bin_means, label="Mean", c="k", marker=".")
-    ax.plot(bin_mid, bin_per90, label="90th percentile", c="C0", marker=".")
-    ax.plot(bin_mid, bin_per10, label="10th percentile", c="C0", marker=".")
+    (l_mean,) = ax.plot(bin_mid, bin_means, label="Mean", c="lightgrey", ls="-", lw=3)
+    (l_per90,) = ax.plot(
+        bin_mid, bin_per90, label="90th percentile", c="lightgrey", ls=":", lw=2
+    )
+    (l_per10,) = ax.plot(
+        bin_mid, bin_per10, label="10th percentile", c="lightgrey", ls=":", lw=2
+    )
     c = ax.pcolormesh(
-        bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", vmin=vmin, vmax=vmax
+        bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", norm=norm
     )
     ax.plot(
         [bin_mid[0], bin_mid[-1]],
@@ -217,14 +226,24 @@ def plot_conditional_panel(
         "r--",
         label="True = Pred",
     )
-    ax.legend(loc="lower right", fontsize=8, framealpha=0.5)
+    ax.legend(
+        [l_mean, l_per90],
+        ["Mean", "P10/P90"],
+        loc="lower right",
+        fontsize=8,
+        framealpha=1,
+        # facecolor="lightgrey",
+    )
     ax.set_xlim(bin_edges[0], bin_edges[-1])
     ax.set_ylim(bin_edges[0], bin_edges[-1])
     ax.set_xlabel("True [K]")
     ax.set_ylabel("Predicted [K]")
     ax.set_title(f"{title}")
     if show_mbe:
-        mbe = np.nanmean(y_pred - y_true)
+        if mbe is not None:
+            pass
+        else:
+            raise ValueError("mbe must be provided if show_mbe is True")
         ax.text(
             250,
             250,
@@ -387,14 +406,26 @@ def plot_outliers_analysis(
     y_pred_clean = y_pred_flat[valid_mask]
 
     # Plot 1: 2D histogram with outliers highlighted
-    c = plot_conditional_panel(
-        axes[0],
-        y_true,
-        y_pred,
-        bin_edges,
-        title="Conditional P(Pred|True) with Outliers",
-        show_mbe=True,
+    bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan = (
+        calculate_conditional_probabilities(y_true_clean, y_pred_clean, bin_edges)
     )
+    plot_conditional_panel(
+        axes[0],
+        bin_edges,
+        bin_means,
+        bin_per90,
+        bin_per10,
+        h_conditional_nan,
+        title="Conditional P(Pred|True) with Outliers",
+        norm=LogNorm(
+            vmin=max(1e-6, np.nanmin(h_conditional_nan)),
+            vmax=np.nanmax(h_conditional_nan),
+        ),
+        show_mbe=True,
+        mbe=np.nanmean(y_pred_clean - y_true_clean),
+    )
+    
+
     axes[0].scatter(
         outliers["y_true_outliers"],
         outliers["y_pred_outliers"],
