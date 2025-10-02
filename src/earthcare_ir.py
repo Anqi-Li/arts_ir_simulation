@@ -150,7 +150,13 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
 
 def insert_bulkprop_from_earthcare(
-    ds_earthcare, ws, habit_std, psd, scat_species=["FWC", "LWC"], coef_mgd=None, habit_pingyang=True,
+    ds_earthcare,
+    ws,
+    habit_std,
+    psd,
+    scat_species=["FWC", "LWC"],
+    coef_mgd=None,
+    habit_pingyang=True,
 ):
     for i, species in enumerate(scat_species):
         ws.Append(ws.particle_bulkprop_names, species)
@@ -369,23 +375,38 @@ def get_frozen_water_path(ds):
     return ds
 
 
-def get_cloud_top_height(ds, fwc_threshold=1e-5):
-    """Calculate the cloud top height based on the frozen water content."""
-    ds["cloud_top_height"] = (
-        ds["height_grid"]
-        .where(ds["frozen_water_content"] > fwc_threshold)
-        .max("height_grid")
-    ).assign_attrs(
-        long_name="Cloud Top Height",
-        units="m",
-        description="Height at which the frozen water content exceeds the threshold",
-        fwc_threshold=fwc_threshold,
-    )
+def get_cloud_top_height(ds, fwc_threshold=1e-5, dbz_threshold=-30, based_on_fwc=True):
+    """Calculate the cloud top height based on the frozen water content (default), otherwise based on dBZ."""
+    if based_on_fwc:
+        ds["cloud_top_height"] = (
+            ds["height_grid"]
+            .where(ds["frozen_water_content"] > fwc_threshold)
+            .max("height_grid")
+        ).assign_attrs(
+            long_name="Cloud Top Height",
+            units="m",
+            description="Height at which the frozen water content exceeds the threshold",
+            fwc_threshold=fwc_threshold,
+        )
+    else:
+        ds["cloud_top_height"] = (
+            ds["height_grid"].where(ds["dBZ"] > dbz_threshold).max("height_grid")
+        ).assign_attrs(
+            long_name="Cloud Top Height",
+            units="m",
+            description="Height at which the dBZ exceeds the threshold",
+            dbz_threshold=dbz_threshold,
+        )
     return ds
 
 
-def get_cloud_top_T(ds, fwc_threshold=1e-5):
-    ds = get_cloud_top_height(ds, fwc_threshold=fwc_threshold)
+def get_cloud_top_T(ds, fwc_threshold=None, dbz_threshold=None, based_on_fwc=True):
+    ds = get_cloud_top_height(
+        ds,
+        fwc_threshold=fwc_threshold,
+        dbz_threshold=dbz_threshold,
+        based_on_fwc=based_on_fwc,
+    )
     ds["cloud_top_T"] = (
         ds["temperature"]
         .where(ds["height_grid"] == ds["cloud_top_height"])
@@ -444,10 +465,10 @@ if __name__ == "__main__":
     else:
         coef_mgd = None
     ds_onion_invtable = get_ds_onion_invtable(
-            habit=habit_std,
-            psd=psd,
-            coef_mgd=coef_mgd,
-        )
+        habit=habit_std,
+        psd=psd,
+        coef_mgd=coef_mgd,
+    )
     # take an earthcare input dataset
     path_earthcare = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),

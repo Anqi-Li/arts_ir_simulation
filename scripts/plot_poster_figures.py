@@ -4,17 +4,25 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FuncFormatter, LogLocator, LogFormatter
-from earthcare_ir import habit_std_list, psd_list
+from earthcare_ir import habit_std_list, psd_list, get_cloud_top_height
 
 from pyarts.workspace import Workspace
 import pyarts.xml as xml
 import os
 import xgboost as xgb
 import xarray as xr
-from plotting import load_arts_output_data, sci_formatter, load_ml_model_and_predict, plot_conditional_panel
+from plotting import (
+    load_arts_output_data,
+    sci_formatter,
+    load_ml_model_and_predict,
+    plot_conditional_panel,
+    get_cloud_top_T,
+)
 
 save = False
-file_pattern = "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
+file_pattern = (
+    "../data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
+)
 
 # %%
 
@@ -279,7 +287,7 @@ ax_extra.set_yscale("log")
 ax_extra.set_xscale("log")
 ax_extra.set_ylim([1e6, 1e11])
 ax_extra.set_xlim([1e-6, 2e-3])
-ax_extra.set_title(f"FWC = {sci_formatter(iwc_fixed, None)} $kg/m^3$",fontsize=10)
+ax_extra.set_title(f"FWC = {sci_formatter(iwc_fixed, None)} $kg/m^3$", fontsize=10)
 ax_extra.set_xlabel("Diameter Volume-eq. [m]")
 
 for i, l, x in zip(
@@ -295,7 +303,9 @@ for i, l, x in zip(
     ],
     [2e-6, 2e-6, 1.5e-6, 2e-6, 1e-6, 2e-5, 4e-5],
 ):
-    label_line(ax_extra, ax_extra.lines[i], label=l, x=x, ha="left", va="bottom", fontsize=9)
+    label_line(
+        ax_extra, ax_extra.lines[i], label=l, x=x, ha="left", va="bottom", fontsize=9
+    )
 
 if save:
     fig.savefig(
@@ -310,7 +320,7 @@ if save:
     save = False
 
 
-#%% create sine wave
+# %% create sine wave
 # color = "#B23200FF"
 color = "#0083B2FF"
 x = np.linspace(0, 8 * np.pi, 400)
@@ -340,21 +350,21 @@ fig.savefig(
 
 
 # %% plot one orbit in time series
-orbit_frame = '04549D' #"04015F"#'04701A'#'03871C'#"04015F"
+orbit_frame = "04549D"  # "04015F"#'04701A'#'03871C'#"04015F"
 
 habits = []
 psds = []
 arts_T = []
 arts_top_height = []
 # Loop through all habit_std and psd combinations
-i = 2  # habit index
+i = 0  # habit index
 for j in range(3):  # psd index
-    habit_std, psd, orbits, ds_arts = load_arts_output_data(i, j, orbit_frame=orbit_frame, file_pattern=file_pattern)
-    # ds_arts = get_cloud_top_height(ds_arts, fwc_threshold=2e-5)
+    habit_std, psd, orbits, ds_arts = load_arts_output_data(
+        i, j, orbit_frame=orbit_frame, file_pattern=file_pattern
+    )
     habits.append(habit_std)
     psds.append(psd)
     arts_T.append(ds_arts["arts"].mean("f_grid"))
-    # arts_top_height.append(ds_arts["cloud_top_height"])
 
 ds_arts = ds_arts.assign(y_pred_ml=("nray", load_ml_model_and_predict(ds_arts)))
 ds_arts["height_grid"] = ds_arts["height_grid"] * 1e-3
@@ -379,13 +389,24 @@ ds_arts["pixel_values"].plot(label="MSI", c="grey", **kwargs)
 
 # plot the difference between ARTS and MSI brightness temperature
 kwargs = dict(ax=axes[2], x="nray", ls="-", lw=1, ylim=[-25, 25])
-[(a - ds_arts["pixel_values"]).assign_attrs(units="K").plot(label=f"{p}", c=c, **kwargs) for c, p, a in zip(colors, psds, arts_T)]
+[
+    (a - ds_arts["pixel_values"])
+    .assign_attrs(units="K")
+    .plot(label=f"{p}", c=c, **kwargs)
+    for c, p, a in zip(colors, psds, arts_T)
+]
 (ds_arts["y_pred_ml"] - ds_arts["pixel_values"]).plot(label="XGBoost", c="r", **kwargs)
 axes[2].axhline(0, color="k", ls="--", lw=1)
 
 handles, labels = axes[1].get_legend_handles_labels()
-labels_cust = ['D14', 'F07', 'M.Gamma', 'XGBoost', 'MSI']  # custom labels
-fig.legend(handles, labels_cust, loc="center right", bbox_to_anchor=(1.05, 0.525), framealpha=0.3)
+labels_cust = ["D14", "F07", "M.Gamma", "XGBoost", "MSI"]  # custom labels
+fig.legend(
+    handles,
+    labels_cust,
+    loc="center right",
+    bbox_to_anchor=(1.05, 0.525),
+    framealpha=0.3,
+)
 # optionally remove the axes legend:
 axes[1].legend().set_visible(False)
 
@@ -420,5 +441,22 @@ if save:
         dpi=1000,
         bbox_inches="tight",
     )
-    print(f'Figure is saved to "../data/figures/arts_output_w_ml_series_{orbit_frame}.png"')
+    print(
+        f'Figure is saved to "../data/figures/arts_output_w_ml_series_{orbit_frame}.png"'
+    )
     save = False
+
+#%%
+from earthcare_ir import get_cloud_top_height, get_cloud_top_T
+dbz_threshold=-25
+ds_arts = get_cloud_top_height(ds_arts, dbz_threshold=dbz_threshold, based_on_fwc=False)
+ds_arts = get_cloud_top_T(ds_arts, dbz_threshold=dbz_threshold, based_on_fwc=False)
+fig, ax=plt.subplots(2,1,sharex=True,constrained_layout=True) 
+ds_arts.dBZ.plot(x='nray',ax=ax[0], cmap='viridis', vmin=-30, vmax=30)
+ds_arts.cloud_top_height.plot(x='nray', ax=ax[0],c='orange',label=f'dbz={dbz_threshold}')
+
+ds_arts.pixel_values.plot(x='nray',ax=ax[1], label='MSI')
+ds_arts.cloud_top_T.plot(x='nray',ax=ax[1], label='cloud top T')
+ds_arts.arts.mean('f_grid').plot(x='nray', ax=ax[1], label=f'ARTS {psd}')
+ax[0].legend()
+ax[1].legend()
