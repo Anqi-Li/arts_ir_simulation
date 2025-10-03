@@ -12,3 +12,4 @@
 *.out
 *.tmp
 *.cache
+/src/data_paths.py
