@@ -1,13 +1,59 @@
 # %%
 import numpy as np
-
 from onion_table import *
 from earthcare_ir import *
-from plotting import plot_fwc_and_temperatures, plot_psd_mgd
+from ectools import ecio
+from ectools import ecplot
+import data_paths
 
-# %%
+# %% take an earthcare input dataset
+orbit_frame = "06554E"
+ds_cfmr = ecio.get_XMET(
+    XMET=ecio.load_XMET(
+        srcpath=data_paths.XMET,
+        frame_code=orbit_frame,
+        nested_directory_structure=True,
+    ),
+    ds=ecio.load_CFMR(
+        srcpath=data_paths.CFMR,
+        prodmod_code="ECA_EXBA",
+        frame_code=orbit_frame,
+        nested_directory_structure=True,
+    ),
+    XMET_1D_variables=[],
+    XMET_2D_variables=[
+        "temperature",
+        "pressure",
+        "specific_humidity",
+        "ozone_mass_mixing_ratio",
+        "specific_cloud_liquid_water_content",
+    ],
+).set_coords(["time", "latitude", "longitude", "height", "surface_elevation"])
+
+print("C-FMR and X-MET loading done.")
+
+# %% Remove profiles with all NaN or very low reflectivity
+nan_pressure = ds_cfmr["pressure"].isnull().all(dim="CPR_height")
+nan_height = ds_cfmr["height"].isnull().all(dim="CPR_height")
+low_reflectivity = (ds_cfmr["reflectivity_corrected"].fillna(-999) < -15).all(dim="CPR_height")
+mask = ~(nan_pressure | nan_height | low_reflectivity)
+
+ds_cfmr_subset = ds_cfmr.where(mask, drop=True).isel(
+    along_track=slice(None, None, 10),  # skip every xth ray to reduce computation time
+)
+ds_cfmr_subset.encoding = ds_cfmr.encoding  # keep the original encoding info
+print(f"Subset number of profiles: {len(ds_cfmr_subset.along_track)}")
+
+# reverse the height dimension so that pressure is increasing
+ds_cfmr_subset = ds_cfmr_subset.isel(CPR_height=slice(None, None, -1))
+
+# %% Prepare h2o_volume_mixing_ratio and liquid_water_content
+ds_cfmr_subset = get_lwc_and_h2o_vmr(ds_cfmr_subset)
+print("LWC and H2O VMR preparation done.")
+
+# %% Invertion to get frozen water content
 habit = habit_std_list[0]
-psd = psd_list[-1]  # "exponential" is the last one in the list
+psd = psd_list[0]
 print(f"Selected habit: {habit}, PSD: {psd}")
 coef_mgd = (
     {
@@ -15,105 +61,21 @@ coef_mgd = (
         "ga": 1.5,  # Gamma parameter
         "mu": 0,  # Default value for mu
     }
-    if psd == "Exponential"
+    if psd == "ModifiedGamma"
     else None
 )
 
-ds_onion_invtable = get_ds_onion_invtable(
-    habit=habit,
-    psd=psd,
-    coef_mgd=coef_mgd,
+ds_cfmr_subset = get_frozen_water_content(
+    get_ds_onion_invtable(habit=habit, psd=psd, coef_mgd=coef_mgd),
+    ds_cfmr_subset,
 )
-plot_table(ds_onion_invtable)
-if psd == "Exponential":
-    plot_psd_mgd(coefs_mgd=coef_mgd)
-
-#%%
-from pyarts.workspace import Workspace
-x_scale = "linear"
-y_scale = "log"
-ws = Workspace(verbosity=0)
-ws.psd_size_grid = np.linspace(1e-6, 50e-6)
-ws.dpnd_data_dx_names = []
-
-# Setting all 4 parameters by GIN
-# This generates a single PSD
-ws.pnd_agenda_input_t = np.array([190])  # Not really used
-ws.pnd_agenda_input = np.array([[]])
-ws.pnd_agenda_input_names = []
-ws.psdDelanoeEtAl14(iwc=1, n0star=-999, Dm=-999)
-plt.figure()
-plt.plot(
-    ws.psd_size_grid.value * 1e6,
-    ws.psd_data.value[0],
-    label=psd,
-    c="C0",
-)
-plt.yscale(y_scale)
-plt.xscale(x_scale)
-plt.xlabel("Diameter (µm)")
-plt.ylabel("PSD (µm⁻¹ cm⁻³)")
-plt.legend()
-plt.grid()
-plt.show()
-# %% take an earthcare input dataset
-orbit_frame = "03872A"
-path_earthcare = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "data/earthcare/arts_input_data/",
-)
-ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
-ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
-ds_earthcare_ = get_frozen_water_path(ds_earthcare_)
-
-ds_earthcare_["reflectivity_integral_log10"] = (
-    ds_earthcare_["dBZ"]
-    .pipe(lambda x: 10 ** (x / 10))
-    .fillna(0)
-    .integrate("height_grid")
-    .pipe(np.log10)
-)
-mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5
-ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
-    nray=slice(None, None, 5),  # skip every xth ray to reduce computation time
-)
-print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
-
-# % plot data
-fig, ax = plot_fwc_and_temperatures(ds_earthcare_subset, fwc_threshold=1e-5)
-# add some text for the chosen habit, psd and coef_mgd below the plots
-ax[1].text(
-    0.05,
-    -0.3,
-    f"Habit: {habit}, PSD: {psd}"
-    + (
-        f"n0: {coef_mgd['n0']:.1e}, ga: {coef_mgd['ga']}"
-        if psd == "exponential"
-        else ""
-    ),
-    transform=ax[1].transAxes,
-    fontsize=10,
-    verticalalignment="top",
-    bbox=dict(facecolor="white", alpha=0.5),
-)
-
-# add text annotation for fwc_threshold
-ax[1].text(
-    0.05,
-    -0.5,
-    f"FWC Threshold for cloud definition: {ds_earthcare_subset['cloud_top_height'].attrs['fwc_threshold']:.1e} kg/m³",
-    transform=ax[1].transAxes,
-    fontsize=10,
-    verticalalignment="top",
-    bbox=dict(facecolor="white", alpha=0.5),
-)
-plt.show()
+print("FWC inversion done.")
 
 
-# %% process
+# %% ARTS simulation for each profile
 def process_nray(i):
     return cal_y_arts(
-        ds_earthcare_subset.isel(nray=i),
+        ds_cfmr_subset.isel(along_track=i),
         habit,
         psd,
         coef_mgd=coef_mgd,
@@ -121,49 +83,123 @@ def process_nray(i):
 
 
 y = []
-bulkprop = []
-vmr = []
 auxiliary = []
 
-with ProcessPoolExecutor(max_workers=64) as executor:
-    futures = [
-        executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))
-    ]
+with ProcessPoolExecutor(max_workers=32) as executor:
+    futures = [executor.submit(process_nray, i) for i in range(len(ds_cfmr_subset.along_track))]
     for f in tqdm(
         as_completed(futures),
         total=len(futures),
-        desc="process nrays",
+        desc="process profiles",
         file=sys.stdout,
         dynamic_ncols=True,
     ):
-        da_y, da_bulkprop, da_vmr, da_auxiliary = f.result()
+        da_y, _, _, da_auxiliary = f.result()
         y.append(da_y)
-        bulkprop.append(da_bulkprop)
-        vmr.append(da_vmr)
         auxiliary.append(da_auxiliary)
 
-da_y = xr.concat(y, dim="nray")
-da_bulkprop = xr.concat(bulkprop, dim="nray")
-da_vmr = xr.concat(vmr, dim="nray")
-da_auxiliary = xr.concat(auxiliary, dim="nray")
+print("ARTS simulation done.")
+
+# %% concatenate results
+da_y = xr.concat(y, dim="along_track")
+da_auxiliary = xr.concat(auxiliary, dim="along_track")
+
+ds_arts = da_auxiliary.assign({"arts": da_y.mean("f_grid")})
+ds_arts["arts"].attrs.update(
+    {
+        "long_name": "ARTS simulated brightness temperature",
+        "units": "K",
+        "CPR source": ds_cfmr.encoding["source"].split("/")[-1],
+        "habit": habit,
+        "PSD": psd,
+        "coef_mgd": str(coef_mgd) if coef_mgd is not None else "None",
+    }
+)
+if len(ds_arts.along_track) > 1:
+    ds_arts = ds_arts.sortby("along_track")
+print("Concatenating results done.")
 
 # %%
-ds_arts = da_auxiliary.assign(
-    arts=da_y,
-    bulkprop=da_bulkprop,
-    vmr=da_vmr,
-)  # .assign(ds_earthcare_subset)
-if len(ds_arts.nray) > 1:
-    ds_arts = ds_arts.sortby("time")
+ds_cfmr = ds_cfmr.merge(ds_arts)
+print("Merging ARTs result with input dataset (C-FMR) done.")
 
-ds_arts = xr.merge([ds_arts, ds_earthcare_subset])
-
-# %%
-ds_arts["arts_y_mean"] = ds_arts["arts"].mean("f_grid")
-fig, ax = plot_fwc_and_temperatures(
-    ds_arts,
-    fwc_threshold=4e-5,
-    temperature_vars=["pixel_values", "cloud_top_T", "arts_y_mean"],
+# %% Compare with MSI TIR2
+# load MSI TIR2 data
+ds_msi = ecio.load_MRGR(
+    srcpath="/data/s6/L1/EarthCare/L1/MSI_RGR_1C",
+    prodmod_code="ECA_EXBA",
+    frame_code=orbit_frame,
+    nested_directory_structure=True,
 )
 
+# %% pick the nearest MSI pixel for each CPR ray
+from scipy.interpolate import NearestNDInterpolator
+
+flatten_hcoords_msi = (
+    ds_msi.reset_coords(["longitude", "latitude"])[["longitude", "latitude"]]
+    .stack({"horizontal_grid": ["along_track", "across_track"]})
+    .to_array()
+)
+NearestIndex = NearestNDInterpolator(flatten_hcoords_msi.data.T, np.arange(len(flatten_hcoords_msi["horizontal_grid"])))
+nearest_indices_on_flatten_hcoords_msi = NearestIndex(np.array([ds_arts["longitude"], ds_arts["latitude"]]).T).astype(int)
+ds_msi_TIR2_select = (
+    ds_msi["TIR2"]
+    .stack({"horizontal_grid": ["along_track", "across_track"]})
+    .isel({"horizontal_grid": nearest_indices_on_flatten_hcoords_msi})
+)
+
+ds_compare = ds_arts.assign({"msi": ("along_track", ds_msi_TIR2_select.data)})
+ds_compare.encoding = ds_msi.encoding  # keep the original encoding info
+
+# %% plot comparison with CFMR reflectivity
+nrows = 2
+fig, axes = plt.subplots(figsize=(25, 7 * nrows), nrows=nrows, gridspec_kw={"hspace": 0.67}, sharex=True)
+ecplot.plot_EC_2D(
+    axes[0],
+    ds_cfmr,
+    "reflectivity_corrected",
+    "Z",
+    units="dBZ",
+    plot_scale="linear",
+    plot_range=[-35, 35],
+    hmax=20e3,
+    use_localtime=False,
+    cmap="calipso",
+)
+ecplot.add_temperature(axes[0], ds_cfmr)
+ecplot.add_marble(axes[0], ds_cfmr)
+
+ds_compare = ds_compare.reindex_like(ds_cfmr).assign_coords(ds_cfmr.coords)
+# ecplot.plot_EC_1D(
+#     axes[1],
+#     ds_compare,
+#     {
+#         "ARTS": {"xdata": ds_compare["time"], "ydata": ds_compare["arts"], "marker": "o", "color": "r"},
+#         "MSI TIR2": {"xdata": ds_compare["time"], "ydata": ds_compare["msi"], "marker": "o", "color": "k"},
+#     },
+#     "IR temperature",
+#     r"$T_B$ [K]",
+#     timevar="time",
+#     include_ruler=False,
+# )
+
+ecplot.plot_EC_1D(
+    axes[1],
+    ds_compare,
+    {
+        "diff(ARTS - MSI)": {
+            "xdata": ds_compare["time"],
+            "ydata": ds_compare["arts"] - ds_compare["msi"],
+            "marker": "*",
+            "markersize": 8,
+            "color": "b",
+        },
+    },
+    "diff(ARTS - MSI)",
+    r"$T_B$ [K]",
+    timevar="time",
+    include_ruler=False,
+)
+axes[1].grid()
+axes[1].legend().remove()
 # %%

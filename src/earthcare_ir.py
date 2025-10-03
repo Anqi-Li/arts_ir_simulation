@@ -15,6 +15,10 @@ from easy_arts.data_model import (
 from physics.constants import DENSITY_H2O_LIQUID
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from onion_table import *
+from physics.unitconv import (
+    mixing_ratio2mass_conc,
+    specific_humidity2h2o_p,
+)
 
 # % map the standard habit to the Yang habit name
 map_habit = {
@@ -24,7 +28,7 @@ map_habit = {
 }
 
 habit_std_list = ["LargePlateAggregate", "8-ColumnAggregate", "6-BulletRosette"]
-psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "Exponential"]
+psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "ModifiedGamma"]
 
 
 # %%
@@ -38,8 +42,16 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
     Returns:
         xarray.DataArray: Brightness temperature in Planck brightness temperature units.
     """
+
+    # Shorten the input profile where pressure grid is NaN
+    ds_earthcare_org = ds_earthcare.copy()
+    ds_earthcare = ds_earthcare_org.where(ds_earthcare_org["pressure"].notnull(), drop=True)
+    if len(ds_earthcare["CPR_height"]) < 2:
+        raise ValueError("Not enough valid pressure levels in the profile.")
+
     # Create a workspace
     ws = ea.wsInit(SpectralRegion.TIR)
+    ws.SetNumberOfThreads(nthreads=1)
 
     # Download ARTS catalogs if they are not already present.
     pyarts.cat.download.retrieve()
@@ -123,9 +135,7 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
     # % Set the cloud layer
     scat_species = ["FWC", "LWC"]  # Arbitrary names
-    insert_bulkprop_from_earthcare(
-        ds_earthcare, ws, habit_std, psd, scat_species, coef_mgd=coef_mgd
-    )
+    insert_bulkprop_from_earthcare(ds_earthcare, ws, habit_std, psd, scat_species, coef_mgd=coef_mgd)
 
     # %
     # Cloudbox
@@ -180,17 +190,13 @@ def insert_bulkprop_from_earthcare(
             elif psd == "FieldEtAl07ML":
                 ea.scat_speciesFieldEtAl07(ws, species, regime="ML")
 
-            elif psd == "Exponential":
+            elif psd == "ModifiedGamma":
                 if coef_mgd is None:
-                    raise ValueError(
-                        "Please provide the coefficients for the exponential PSD."
-                    )
+                    raise ValueError("Please provide the coefficients for the Modified Gamma PSD.")
                 n0 = coef_mgd.get("n0")
                 ga = coef_mgd.get("ga", 1)
                 mu = coef_mgd.get("mu", 0)
-                ea.scat_speciesMgdMass(
-                    ws, species, la=-999, mu=mu, n0=n0, ga=ga, x_unit="dveq"
-                )
+                ea.scat_speciesMgdMass(ws, species, la=-999, mu=mu, n0=n0, ga=ga, x_unit="dveq")
 
             else:
                 raise ValueError(f"PSD {psd} not handled")
@@ -240,12 +246,12 @@ def get_mgd_coefs(remove_suffix=False):
 
 
 def insert_atm_from_earthcare(ds_earthcare, ws):
-    ws.z_field = ds_earthcare["height_grid"].data.reshape(-1, 1, 1)
+    ws.z_field = ds_earthcare["height"].data.reshape(-1, 1, 1)
     ws.t_field = ds_earthcare["temperature"].data.reshape(-1, 1, 1)
-    if ds_earthcare["surfaceElevation"] > ds_earthcare["height_grid"].min():
-        ws.z_surface = ds_earthcare["surfaceElevation"].data.reshape(1, 1)
+    if ds_earthcare["surface_elevation"].min() > ds_earthcare["height"].min():
+        ws.z_surface = ds_earthcare["surface_elevation"].min().data.reshape(1, 1)
     else:
-        ws.z_surface = ds_earthcare["height_grid"].min().data.reshape(1, 1)
+        ws.z_surface = ds_earthcare["height"].min().data.reshape(1, 1)
 
     vmr_field_stack = []
     for s in ws.abs_species.value:
@@ -260,13 +266,7 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
             vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_n2o)
         elif s == "O3":
-            vmr_o3 = (
-                28.9644
-                / 47.9982
-                * ds_earthcare["ozone_mass_mixing_ratio"]
-                .fillna(0)
-                .data.reshape(-1, 1, 1)
-            )
+            vmr_o3 = 28.9644 / 47.9982 * ds_earthcare["ozone_mass_mixing_ratio"].fillna(0).data.reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_o3)
         elif s == "O2":
             vmr_o2 = 0.2095 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
@@ -275,10 +275,7 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
             vmr_n2 = 0.7809 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_n2)
         elif s == "liquidcloud":
-            vmr_lwc = (
-                ds_earthcare["cloud_liquid_water_content"].data.reshape(-1, 1, 1)
-                / DENSITY_H2O_LIQUID
-            )
+            vmr_lwc = ds_earthcare["cloud_liquid_water_content"].data.reshape(-1, 1, 1) / DENSITY_H2O_LIQUID
             vmr_field_stack.append(vmr_lwc)
         else:
             print(s)
@@ -291,9 +288,7 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
     da_y = xr.DataArray(
         name="IR Temperature",
         data=ws.y.value,
-        coords={
-            "f_grid": pyarts.arts.convert.freq2wavelen(ws.f_grid.value.value) * 1e6
-        },
+        coords={"f_grid": pyarts.arts.convert.freq2wavelen(ws.f_grid.value.value) * 1e6},
         attrs={
             "unit": "K",
             "long_name": "Brightness Temperature",
@@ -305,7 +300,7 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
         data=ws.particle_bulkprop_field.value.value.squeeze(),
         coords={
             "scat_species": scat_species,
-            "height_grid": ds_earthcare["height_grid"],
+            "height": ds_earthcare["height"].data,
         },
         attrs={
             "unit": "kg m-3",
@@ -316,7 +311,7 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
         data=ws.vmr_field.value.value.squeeze(),
         coords={
             "abs_species": [str(s).split("-")[0] for s in list(ws.abs_species.value)],
-            "height_grid": ds_earthcare["height_grid"],
+            "height": ds_earthcare["height"].data,
         },
         attrs={
             "unit": "1",
@@ -328,25 +323,25 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
     return da_y, da_bulkprop_field, da_vmr_field, da_auxiliary
 
 
-def get_frozen_water_content(ds_onion_invtable, ds_earthcare_):
+def get_frozen_water_content(ds_onion_invtable, ds_earthcare):
     lowest_dBZ_threshold = -30
-    ds_earthcare_["dBZ"] = ds_earthcare_["dBZ"].where(
-        ds_earthcare_["dBZ"] >= lowest_dBZ_threshold
+    ds_earthcare["reflectivity_corrected"] = ds_earthcare["reflectivity_corrected"].where(
+        ds_earthcare["reflectivity_corrected"] >= lowest_dBZ_threshold
     )
 
     profile_fwc = (
         ds_onion_invtable.sel(radiative_properties="FWC")
         .interp(
-            Temperature=ds_earthcare_["temperature"],
-            dBZ=ds_earthcare_["dBZ"],
+            Temperature=ds_earthcare["temperature"],
+            dBZ=ds_earthcare["reflectivity_corrected"],
         )
         .pipe(lambda x: 10**x)  # Convert from log10(FWC) to FWC in kg/m^3
         .fillna(0)
     )
 
-    ds_earthcare_ = ds_earthcare_.assign(
+    ds_earthcare = ds_earthcare.assign(
         frozen_water_content=(
-            ds_earthcare_.dims,
+            ds_earthcare.dims,
             profile_fwc.where(
                 profile_fwc >= 0,
                 0,  # ensure no negative values
@@ -358,7 +353,7 @@ def get_frozen_water_content(ds_onion_invtable, ds_earthcare_):
         )
     )
 
-    return ds_earthcare_
+    return ds_earthcare
 
 
 def get_frozen_water_path(ds):
@@ -378,20 +373,14 @@ def get_frozen_water_path(ds):
 def get_cloud_top_height(ds, fwc_threshold=1e-5, dbz_threshold=-30, based_on_fwc=True):
     """Calculate the cloud top height based on the frozen water content (default), otherwise based on dBZ."""
     if based_on_fwc:
-        ds["cloud_top_height"] = (
-            ds["height_grid"]
-            .where(ds["frozen_water_content"] > fwc_threshold)
-            .max("height_grid")
-        ).assign_attrs(
+        ds["cloud_top_height"] = (ds["height_grid"].where(ds["frozen_water_content"] > fwc_threshold).max("height_grid")).assign_attrs(
             long_name="Cloud Top Height",
             units="m",
             description="Height at which the frozen water content exceeds the threshold",
             fwc_threshold=fwc_threshold,
         )
     else:
-        ds["cloud_top_height"] = (
-            ds["height_grid"].where(ds["dBZ"] > dbz_threshold).max("height_grid")
-        ).assign_attrs(
+        ds["cloud_top_height"] = (ds["height_grid"].where(ds["reflectivity_corrected"] > dbz_threshold).max("height_grid")).assign_attrs(
             long_name="Cloud Top Height",
             units="m",
             description="Height at which the dBZ exceeds the threshold",
@@ -407,17 +396,50 @@ def get_cloud_top_T(ds, fwc_threshold=None, dbz_threshold=None, based_on_fwc=Tru
         dbz_threshold=dbz_threshold,
         based_on_fwc=based_on_fwc,
     )
-    ds["cloud_top_T"] = (
-        ds["temperature"]
-        .where(ds["height_grid"] == ds["cloud_top_height"])
-        .min("height_grid", skipna=True)
-    ).assign_attrs(
+    ds["cloud_top_T"] = (ds["temperature"].where(ds["height_grid"] == ds["cloud_top_height"]).min("height_grid", skipna=True)).assign_attrs(
         long_name="Cloud Top Temperature",
         units="K",
         description="Temperature at the cloud top height",
         fwc_threshold=fwc_threshold,
     )
     return ds
+
+
+def get_lwc_and_h2o_vmr(ds_earthcare):
+    # make H2O VMR from specific_humidity
+    ds_earthcare["h2o_volume_mixing_ratio"] = (
+        (
+            specific_humidity2h2o_p(
+                ds_earthcare["specific_humidity"],
+                ds_earthcare["pressure"],
+            )
+            / ds_earthcare["pressure"]
+        )
+        .fillna(0)
+        .assign_attrs(
+            dict(
+                long_name="Water Vapor Volume Mixing Ratio",
+                units="kg kg-1",
+            )
+        )
+    )
+
+    ds_earthcare["cloud_liquid_water_content"] = mixing_ratio2mass_conc(
+        ds_earthcare["specific_cloud_liquid_water_content"],  # kg/kg
+        ds_earthcare["pressure"],  # Pa
+        ds_earthcare["temperature"],  # K
+    ).assign_attrs(
+        dict(
+            long_name="Cloud Liquid Water Content",
+            units="kg m-3",
+        )
+    )
+
+    ds_earthcare["cloud_liquid_water_content"] = ds_earthcare["cloud_liquid_water_content"].where(
+        ds_earthcare["cloud_liquid_water_content"] >= 0,
+        0,  # ensure no negative values
+    )
+    return ds_earthcare
 
 
 # %%
@@ -429,9 +451,7 @@ if __name__ == "__main__":
         j = int(argv[2])
         orbit_frame = argv[3]
     else:
-        raise ValueError(
-            "Please provide habit and psd indices as command line arguments."
-        )
+        raise ValueError("Please provide habit and psd indices as command line arguments.")
 
     # %% choose invtable
     habit_std = habit_std_list[i]  # Habit to use
@@ -481,11 +501,7 @@ if __name__ == "__main__":
 
     # remove some profiles
     ds_earthcare_["reflectivity_integral_log10"] = (
-        ds_earthcare_["dBZ"]
-        .pipe(lambda x: 10 ** (x / 10))
-        .fillna(0)
-        .integrate("height_grid")
-        .pipe(np.log10)
+        ds_earthcare_["reflectivity_corrected"].pipe(lambda x: 10 ** (x / 10)).fillna(0).integrate("height_grid").pipe(np.log10)
     )
     mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5
 
@@ -514,10 +530,7 @@ if __name__ == "__main__":
     auxiliary = []
 
     with ProcessPoolExecutor(max_workers=64) as executor:
-        futures = [
-            executor.submit(process_nray, i)
-            for i in range(len(ds_earthcare_subset.nray))
-        ]
+        futures = [executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))]
         for f in tqdm(
             as_completed(futures),
             total=len(futures),

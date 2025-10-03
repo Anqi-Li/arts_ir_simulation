@@ -48,10 +48,10 @@ def make_onion_invtable(habit, psd, coef_mgd=None):
     elif psd == "FieldEtAl07ML":
         ea.scat_speciesFieldEtAl07(ws, name, regime="ML")
 
-    elif psd == "Exponential":
-        # Define an exponential PSD with varing lambda
+    elif psd == "ModifiedGamma":
+        # Define an Modified Gamma PSD with varing lambda
         if coef_mgd is None:
-            raise ValueError("coef_mgd must be provided for Exponential PSD")
+            raise ValueError("coef_mgd must be provided for Modified Gamma PSD")
         n0 = coef_mgd.get("n0", 1e6)
         ga = coef_mgd.get("ga", 1)
         ea.scat_speciesMgdMass(ws, name, n0=n0, mu=0, la=-999, ga=ga)
