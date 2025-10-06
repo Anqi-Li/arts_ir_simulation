@@ -1,8 +1,9 @@
 # %%
-from sys import argv
 import sys
+import glob
 import pyarts
 import numpy as np
+from datetime import datetime
 import os
 import xarray as xr
 from tqdm import tqdm
@@ -19,6 +20,8 @@ from physics.unitconv import (
     mixing_ratio2mass_conc,
     specific_humidity2h2o_p,
 )
+from ectools import ecio
+import data_paths
 
 # % map the standard habit to the Yang habit name
 map_habit = {
@@ -27,8 +30,22 @@ map_habit = {
     "6-BulletRosette": "SolidBulletRosette-Smooth",
 }
 
+# deprecated! Use classes below instead!
 habit_std_list = ["LargePlateAggregate", "8-ColumnAggregate", "6-BulletRosette"]
-psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "ModifiedGamma"]
+psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "FieldEtAl07ML", "ModifiedGamma"]
+
+
+class Habit:
+    Plate = "LargePlateAggregate"
+    Column = "8-ColumnAggregate"
+    Bullet = "6-BulletRosette"
+
+
+class PSD:
+    D14 = "DelanoeEtAl14"
+    F07T = "FieldEtAl07TR"
+    F07M = "FieldEtAl07ML"
+    MDG = "ModifiedGamma"
 
 
 # %%
@@ -443,126 +460,216 @@ def get_lwc_and_h2o_vmr(ds_earthcare):
 
 
 # %%
-if __name__ == "__main__":
-
-    # take system arguments to select habit, psd and orbit frame
-    if len(argv) == 4:
-        i = int(argv[1])
-        j = int(argv[2])
-        orbit_frame = argv[3]
-    else:
-        raise ValueError("Please provide habit and psd indices as command line arguments.")
-
-    # %% choose invtable
-    habit_std = habit_std_list[i]  # Habit to use
-    psd = psd_list[j]  # PSD to use
-    print(habit_std)
-    print(psd)
-
-    file_save_ncdf = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        f"data/earthcare/arts_output_data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc",
-    )
-
-    # %% check if the file already exists
-    if os.path.exists(file_save_ncdf):
-        print(f"File {file_save_ncdf} already exists. Skipping computation.")
-        sys.exit(0)
-
-    # %% Load Earthcare data
-    # ds_onion_invtable = xr.open_dataset(
-    #     os.path.join(
-    #         os.path.dirname(os.path.dirname(__file__)),
-    #         f"data/onion_invtables/onion_invtable_{habit_std}_{psd}.nc",
-    #     ),
-    # )[f"onion_invtable_{habit_std}_{psd}"]
-    if psd == "Exponential":
-        # coefficients for the exponential PSD
-        coef_mgd = {
-            "n0": 1e10,  # Number concentration
-            "ga": 1.5,  # Gamma parameter
-        }
-    else:
-        coef_mgd = None
-    ds_onion_invtable = get_ds_onion_invtable(
-        habit=habit_std,
-        psd=psd,
-        coef_mgd=coef_mgd,
-    )
-    # take an earthcare input dataset
-    path_earthcare = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "data/earthcare/arts_input_data/",
-    )
-    ds_earthcare_ = xr.open_dataset(path_earthcare + f"arts_input_{orbit_frame}.nc")
-
-    # put FWC
-    ds_earthcare_ = get_frozen_water_content(ds_onion_invtable, ds_earthcare_)
-
-    # remove some profiles
-    ds_earthcare_["reflectivity_integral_log10"] = (
-        ds_earthcare_["reflectivity_corrected"].pipe(lambda x: 10 ** (x / 10)).fillna(0).integrate("height_grid").pipe(np.log10)
-    )
-    mask = ds_earthcare_["reflectivity_integral_log10"] > 3.5
-
-    if (~mask).all():
-        print("All nrays are cleared sky. No computation needed.")
-        sys.exit(0)
-
-    ds_earthcare_subset = ds_earthcare_.where(mask, drop=True).isel(
-        nray=slice(None, None, 5),  # skip every xth ray to reduce computation time
-    )
-    print(f"Number of nrays: {len(ds_earthcare_subset.nray)}")
-
-    # %%
-    # % loop over nrays
-    def process_nray(i):
-        return cal_y_arts(
-            ds_earthcare_subset.isel(nray=i),
-            habit_std,
-            psd,
-            coef_mgd=coef_mgd,
-        )
-
-    y = []
-    bulkprop = []
-    vmr = []
-    auxiliary = []
-
-    with ProcessPoolExecutor(max_workers=64) as executor:
-        futures = [executor.submit(process_nray, i) for i in range(len(ds_earthcare_subset.nray))]
-        for f in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="process nrays",
-            file=sys.stdout,
-            dynamic_ncols=True,
-        ):
-            da_y, da_bulkprop, da_vmr, da_auxiliary = f.result()
-            y.append(da_y)
-            bulkprop.append(da_bulkprop)
-            vmr.append(da_vmr)
-            auxiliary.append(da_auxiliary)
-
-    da_y = xr.concat(y, dim="nray")
-    da_bulkprop = xr.concat(bulkprop, dim="nray")
-    da_vmr = xr.concat(vmr, dim="nray")
-    da_auxiliary = xr.concat(auxiliary, dim="nray")
-
-    ds_arts = da_auxiliary.assign(
-        arts=da_y,
-        bulkprop=da_bulkprop,
-        vmr=da_vmr,
-    )
-
-    ds_arts = xr.combine_by_coords(
-        [
-            ds_arts.set_xindex("time"),
-            ds_earthcare_subset.set_xindex("time"),
+def get_inputs(orbit_frame: str, skip_profiles: int = 5, low_reflectivity_threshold: float = -15):
+    ds_cfmr = ecio.get_XMET(
+        XMET=ecio.load_XMET(
+            srcpath=data_paths.XMET,
+            frame_code=orbit_frame,
+            nested_directory_structure=True,
+        ),
+        ds=ecio.load_CFMR(
+            srcpath=data_paths.CFMR,
+            prodmod_code="ECA_EXBA",
+            frame_code=orbit_frame,
+            nested_directory_structure=True,
+        ),
+        XMET_1D_variables=[],
+        XMET_2D_variables=[
+            "temperature",
+            "pressure",
+            "specific_humidity",
+            "ozone_mass_mixing_ratio",
+            "specific_cloud_liquid_water_content",
         ],
-        join="inner",
+    ).set_coords(["time", "latitude", "longitude", "height", "surface_elevation"])
+
+    print("C-FMR and X-MET loading done.")
+
+    # Remove profiles with all NaN or very low reflectivity
+    nan_pressure = ds_cfmr["pressure"].isnull().all(dim="CPR_height")
+    nan_height = ds_cfmr["height"].isnull().all(dim="CPR_height")
+    low_reflectivity = (ds_cfmr["reflectivity_corrected"].fillna(-999) < low_reflectivity_threshold).all(dim="CPR_height")
+    mask = ~(nan_pressure | nan_height | low_reflectivity)
+
+    ds_cfmr_subset = ds_cfmr.where(mask, drop=True).isel(
+        along_track=slice(None, None, skip_profiles),  # skip every xth ray to reduce computation time
     )
 
-    # %%
-    # %% save to file
-    ds_arts.to_netcdf(file_save_ncdf)
+    # reverse the height dimension so that pressure is increasing
+    ds_cfmr_subset = ds_cfmr_subset.isel(CPR_height=slice(None, None, -1))
+    ds_cfmr_subset.encoding = ds_cfmr.encoding  # keep the original encoding info
+
+    print(f"Subset number of profiles: {len(ds_cfmr_subset.along_track)}")
+
+    # Prepare h2o_volume_mixing_ratio and liquid_water_content
+    ds_cfmr_subset = get_lwc_and_h2o_vmr(ds_cfmr_subset)
+    print("LWC and H2O VMR preparation done.")
+    return ds_cfmr_subset
+
+
+def main(
+    orbit_frame: str,
+    skip_profiles: int = 5,
+    habit_list: list = [Habit.Bullet, Habit.Column, Habit.Plate],
+    psd_list: list = [PSD.D14, PSD.MDG, PSD.F07T],
+    low_reflectivity_threshold: float = -15,
+    skip_existing: bool = True,
+    max_workers: int = 32,
+    save_results: bool = False,
+):
+    print(f"Processing orbit frame: {orbit_frame}")
+
+    # check if all habits and psds for this orbit frame have already been computed
+    existed_files = 0
+    for habit in habit_list:
+        for psd in psd_list:
+            filename_save_ncdf = os.path.join(
+                data_paths.arts_output_TIR2,
+                f"arts_TIR2_{orbit_frame}_{habit}_{psd}.nc",
+            )
+            if os.path.exists(filename_save_ncdf):
+                existed_files += 1
+    if existed_files == len(habit_list) * len(psd_list) and skip_existing:
+        print(f"All combinations of habit and PSD for orbit frame {orbit_frame} already exist. Skipping computation.")
+        return None
+
+    # Load Earthcare data
+    ds_cfmr_subset = get_inputs(orbit_frame, skip_profiles, low_reflectivity_threshold)
+
+    for habit in habit_list:
+        for psd in psd_list:
+            print(f"Selected habit: {habit}, PSD: {psd}")
+            filename_save_ncdf = os.path.join(
+                data_paths.arts_output_TIR2,
+                f"arts_TIR2_{orbit_frame}_{habit}_{psd}.nc",
+            )
+            if os.path.exists(filename_save_ncdf) & skip_existing:
+                print(f"File {filename_save_ncdf} already exists. Skipping computation.")
+                continue
+
+            coef_mgd = (
+                {
+                    "n0": 1e10,  # Number concentration
+                    "ga": 1.5,  # Gamma parameter
+                    "mu": 0,  # Default value for mu
+                }
+                if psd == PSD.MDG
+                else None
+            )
+
+            # Invertion to get frozen water content
+            ds_cfmr_subset = get_frozen_water_content(
+                get_ds_onion_invtable(habit=habit, psd=psd, coef_mgd=coef_mgd),
+                ds_cfmr_subset,
+            )
+            print("FWC inversion done.")
+
+            # ARTS simulation for each profile
+            y = []
+            auxiliary = []
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(
+                        cal_y_arts,
+                        ds_cfmr_subset.isel(along_track=i),
+                        habit,
+                        psd,
+                        coef_mgd,
+                    )
+                    for i in range(len(ds_cfmr_subset.along_track))
+                ]
+                for f in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="process profiles",
+                    file=sys.stdout,
+                    dynamic_ncols=True,
+                ):
+                    da_y, _, _, da_auxiliary = f.result()
+                    y.append(da_y)
+                    auxiliary.append(da_auxiliary)
+
+            print("ARTS simulation done.")
+
+            # concatenate results
+            da_y = xr.concat(y, dim="along_track")
+            da_auxiliary = xr.concat(auxiliary, dim="along_track")
+
+            ds_arts = da_auxiliary.assign({"arts": da_y.mean("f_grid")})
+            ds_arts["arts"].attrs.update(
+                {
+                    "long_name": "ARTS simulated brightness temperature",
+                    "units": "K",
+                    "CPR source": ds_cfmr_subset.encoding["source"].split("/")[-1],
+                    "habit": habit,
+                    "PSD": psd,
+                    "coef_mgd": str(coef_mgd) if coef_mgd is not None else "None",
+                }
+            )
+            if len(ds_arts.along_track) > 1:
+                ds_arts = ds_arts.sortby("along_track")
+            print("Concatenating results done.")
+
+            if save_results:
+                ds_arts.to_netcdf(filename_save_ncdf)
+                print(f"ARTS result saved to {filename_save_ncdf}")
+
+    return ds_arts
+
+
+# %%
+if __name__ == "__main__":
+    filelist_CFMR = ecio.get_filelist(
+        srcpath=os.path.join(data_paths.CFMR, "*", "*", "*"),
+        prodmod_code="ECA_EXBA",
+    )
+    filelist_XMET = ecio.get_filelist(
+        srcpath=os.path.join(data_paths.XMET, "*", "*", "*"),
+        prodmod_code="ECA_EXAA",
+    )
+    filelist_MRGR = ecio.get_filelist(
+        srcpath=os.path.join(data_paths.MRGR, "*", "*", "*"),
+        prodmod_code="ECA_EXBA",
+    )
+    orbit_frame_list_CFMR = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_CFMR]
+    orbit_frame_list_XMET = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_XMET]
+    orbit_frame_list_MRGR = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_MRGR]
+    common_orbit_frame_list = list(set(orbit_frame_list_CFMR) & set(orbit_frame_list_XMET) & set(orbit_frame_list_MRGR))
+
+    # %% set up logging
+    log_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "data",
+        "log",
+    )
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Create a new log file with timestamp
+    log_path = os.path.join(log_dir, f"earthcare_ir_{datetime.now():%Y%m%d_%H%M%S}.log")
+
+    # Keep only the 5 most recent log files
+    log_files = sorted(glob.glob(os.path.join(log_dir, "earthcare_ir_*.log")))
+    while len(log_files) > 4:  # will become 5 after this run
+        os.remove(log_files[0])
+        log_files = sorted(glob.glob(os.path.join(log_dir, "earthcare_ir_*.log")))
+
+    # %% process all common orbit frames
+    for orbit_frame in sorted(common_orbit_frame_list):
+        # catch errors and continue
+        try:
+            _ = main(
+                orbit_frame=orbit_frame,
+                skip_profiles=5,
+                habit_list=[Habit.Bullet, Habit.Column, Habit.Plate],
+                psd_list=[PSD.D14, PSD.MDG, PSD.F07T],
+                skip_existing=True,
+                max_workers=32,
+                save_results=True,
+            )
+            print(f"Finished orbit frame: {orbit_frame}")
+        except Exception as e:
+            print(f"Error processing orbit frame {orbit_frame}: {e}")
+            # write error to log file
+            with open(log_path, "a") as logfile:
+                logfile.write(f"Error processing orbit frame {orbit_frame}: {e}\n")
+            continue
