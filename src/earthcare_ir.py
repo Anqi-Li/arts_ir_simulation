@@ -461,12 +461,14 @@ def get_lwc_and_h2o_vmr(ds_earthcare):
 
 # %%
 def get_inputs(orbit_frame: str, skip_profiles: int = 5, low_reflectivity_threshold: float = -15):
-    ds_cfmr = ecio.get_XMET(
-        XMET=ecio.load_XMET(
+    ds_xmet = ecio.load_XMET(
             srcpath=data_paths.XMET,
             frame_code=orbit_frame,
             nested_directory_structure=True,
-        ),
+        )
+    ds_xmet.close()
+    ds_cfmr = ecio.get_XMET(
+        XMET=ds_xmet,
         ds=ecio.load_CFMR(
             srcpath=data_paths.CFMR,
             prodmod_code="ECA_EXBA",
@@ -483,6 +485,7 @@ def get_inputs(orbit_frame: str, skip_profiles: int = 5, low_reflectivity_thresh
         ],
     ).set_coords(["time", "latitude", "longitude", "height", "surface_elevation"])
 
+    ds_cfmr.close()
     print("C-FMR and X-MET loading done.")
 
     # Remove profiles with all NaN or very low reflectivity
