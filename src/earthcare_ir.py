@@ -22,6 +22,7 @@ from physics.unitconv import (
 )
 from ectools import ecio
 import data_paths
+import time
 
 # % map the standard habit to the Yang habit name
 map_habit = {
@@ -50,6 +51,7 @@ class PSD:
 
 # %%
 def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
+    # TODO: consume ds_earthcare as dict for better multiprocessing?
     """Compute the brightness temperature for a given Earthcare dataset,
     habit and particle size distribution (PSD).
     Args:
@@ -61,8 +63,8 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
     """
 
     # Shorten the input profile where pressure grid is NaN
-    ds_earthcare_org = ds_earthcare.copy()
-    ds_earthcare = ds_earthcare_org.where(ds_earthcare_org["pressure"].notnull(), drop=True)
+    mask_notnull = ds_earthcare["pressure"].notnull() & ds_earthcare["height"].notnull()
+    ds_earthcare = ds_earthcare.where(mask_notnull, drop=True)
     if len(ds_earthcare["CPR_height"]) < 2:
         raise ValueError("Not enough valid pressure levels in the profile.")
 
@@ -71,7 +73,7 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
     ws.SetNumberOfThreads(nthreads=1)
 
     # Download ARTS catalogs if they are not already present.
-    pyarts.cat.download.retrieve()
+    # pyarts.cat.download.retrieve()
 
     # Use a customised scattering folder to combine PingYang data and liquid droplet
     ws.stdhabits_folder = "/scratch/li/arts-yang-liquid-simlink"
@@ -152,7 +154,9 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
     # % Set the cloud layer
     scat_species = ["FWC", "LWC"]  # Arbitrary names
-    insert_bulkprop_from_earthcare(ds_earthcare, ws, habit_std, psd, scat_species, coef_mgd=coef_mgd)
+    insert_bulkprop_from_earthcare(
+        ds_earthcare, ws, habit_std, psd, scat_species, coef_mgd=coef_mgd
+    )
 
     # %
     # Cloudbox
@@ -163,7 +167,10 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
     # We check the atmospheric geometry, the atmospheric fields, the cloud box,
     # and the sensor.
     ea.checks(ws)
+    start = time.perf_counter_ns()
     ea.disort(ws, Npfct=-1)
+    end = time.perf_counter_ns()
+    # print(f"DISORT processed in {(end-start)/1e9:.4f} seconds")
 
     # Switch off clouds?
     # ea.allsky2clearsky(ws)
@@ -171,9 +178,12 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
     # We perform the all sky calculations
     ws.yCalc()
+    # print(f"Profile processed in {(end-start)/1e9:.4f} seconds")
 
     # save in data array
-    return extract_xr_arrays(ds_earthcare, ws, scat_species)
+    res = extract_xr_arrays(ds_earthcare, ws, scat_species)
+
+    return res
 
 
 def insert_bulkprop_from_earthcare(
@@ -198,22 +208,26 @@ def insert_bulkprop_from_earthcare(
             )
 
             # Set ice PSD
-            if psd == "DelanoeEtAl14":
+            if psd == PSD.D14:
                 ea.scat_speciesDelanoeEtAl14(ws, species)
 
-            elif psd == "FieldEtAl07TR":
+            elif psd == PSD.F07T:
                 ea.scat_speciesFieldEtAl07(ws, species, regime="TR")
 
-            elif psd == "FieldEtAl07ML":
+            elif psd == PSD.F07M:
                 ea.scat_speciesFieldEtAl07(ws, species, regime="ML")
 
-            elif psd == "ModifiedGamma":
+            elif psd == PSD.MDG:
                 if coef_mgd is None:
-                    raise ValueError("Please provide the coefficients for the Modified Gamma PSD.")
+                    raise ValueError(
+                        "Please provide the coefficients for the Modified Gamma PSD."
+                    )
                 n0 = coef_mgd.get("n0")
                 ga = coef_mgd.get("ga", 1)
                 mu = coef_mgd.get("mu", 0)
-                ea.scat_speciesMgdMass(ws, species, la=-999, mu=mu, n0=n0, ga=ga, x_unit="dveq")
+                ea.scat_speciesMgdMass(
+                    ws, species, la=-999, mu=mu, n0=n0, ga=ga, x_unit="dveq"
+                )
 
             else:
                 raise ValueError(f"PSD {psd} not handled")
@@ -283,7 +297,13 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
             vmr_n2o = 330e-9 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_n2o)
         elif s == "O3":
-            vmr_o3 = 28.9644 / 47.9982 * ds_earthcare["ozone_mass_mixing_ratio"].fillna(0).data.reshape(-1, 1, 1)
+            vmr_o3 = (
+                28.9644
+                / 47.9982
+                * ds_earthcare["ozone_mass_mixing_ratio"]
+                .fillna(0)
+                .data.reshape(-1, 1, 1)
+            )
             vmr_field_stack.append(vmr_o3)
         elif s == "O2":
             vmr_o2 = 0.2095 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
@@ -292,7 +312,10 @@ def insert_atm_from_earthcare(ds_earthcare, ws):
             vmr_n2 = 0.7809 * np.ones(len(ws.z_field.value)).reshape(-1, 1, 1)
             vmr_field_stack.append(vmr_n2)
         elif s == "liquidcloud":
-            vmr_lwc = ds_earthcare["cloud_liquid_water_content"].data.reshape(-1, 1, 1) / DENSITY_H2O_LIQUID
+            vmr_lwc = (
+                ds_earthcare["cloud_liquid_water_content"].data.reshape(-1, 1, 1)
+                / DENSITY_H2O_LIQUID
+            )
             vmr_field_stack.append(vmr_lwc)
         else:
             print(s)
@@ -305,7 +328,9 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
     da_y = xr.DataArray(
         name="IR Temperature",
         data=ws.y.value,
-        coords={"f_grid": pyarts.arts.convert.freq2wavelen(ws.f_grid.value.value) * 1e6},
+        coords={
+            "f_grid": pyarts.arts.convert.freq2wavelen(ws.f_grid.value.value) * 1e6
+        },
         attrs={
             "unit": "K",
             "long_name": "Brightness Temperature",
@@ -342,9 +367,9 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
 
 def get_frozen_water_content(ds_onion_invtable, ds_earthcare):
     lowest_dBZ_threshold = -30
-    ds_earthcare["reflectivity_corrected"] = ds_earthcare["reflectivity_corrected"].where(
-        ds_earthcare["reflectivity_corrected"] >= lowest_dBZ_threshold
-    )
+    ds_earthcare["reflectivity_corrected"] = ds_earthcare[
+        "reflectivity_corrected"
+    ].where(ds_earthcare["reflectivity_corrected"] >= lowest_dBZ_threshold)
 
     profile_fwc = (
         ds_onion_invtable.sel(radiative_properties="FWC")
@@ -390,14 +415,22 @@ def get_frozen_water_path(ds):
 def get_cloud_top_height(ds, fwc_threshold=1e-5, dbz_threshold=-30, based_on_fwc=True):
     """Calculate the cloud top height based on the frozen water content (default), otherwise based on dBZ."""
     if based_on_fwc:
-        ds["cloud_top_height"] = (ds["height_grid"].where(ds["frozen_water_content"] > fwc_threshold).max("height_grid")).assign_attrs(
+        ds["cloud_top_height"] = (
+            ds["height_grid"]
+            .where(ds["frozen_water_content"] > fwc_threshold)
+            .max("height_grid")
+        ).assign_attrs(
             long_name="Cloud Top Height",
             units="m",
             description="Height at which the frozen water content exceeds the threshold",
             fwc_threshold=fwc_threshold,
         )
     else:
-        ds["cloud_top_height"] = (ds["height_grid"].where(ds["reflectivity_corrected"] > dbz_threshold).max("height_grid")).assign_attrs(
+        ds["cloud_top_height"] = (
+            ds["height_grid"]
+            .where(ds["reflectivity_corrected"] > dbz_threshold)
+            .max("height_grid")
+        ).assign_attrs(
             long_name="Cloud Top Height",
             units="m",
             description="Height at which the dBZ exceeds the threshold",
@@ -413,7 +446,11 @@ def get_cloud_top_T(ds, fwc_threshold=None, dbz_threshold=None, based_on_fwc=Tru
         dbz_threshold=dbz_threshold,
         based_on_fwc=based_on_fwc,
     )
-    ds["cloud_top_T"] = (ds["temperature"].where(ds["height_grid"] == ds["cloud_top_height"]).min("height_grid", skipna=True)).assign_attrs(
+    ds["cloud_top_T"] = (
+        ds["temperature"]
+        .where(ds["height_grid"] == ds["cloud_top_height"])
+        .min("height_grid", skipna=True)
+    ).assign_attrs(
         long_name="Cloud Top Temperature",
         units="K",
         description="Temperature at the cloud top height",
@@ -452,7 +489,9 @@ def get_lwc_and_h2o_vmr(ds_earthcare):
         )
     )
 
-    ds_earthcare["cloud_liquid_water_content"] = ds_earthcare["cloud_liquid_water_content"].where(
+    ds_earthcare["cloud_liquid_water_content"] = ds_earthcare[
+        "cloud_liquid_water_content"
+    ].where(
         ds_earthcare["cloud_liquid_water_content"] >= 0,
         0,  # ensure no negative values
     )
@@ -460,12 +499,14 @@ def get_lwc_and_h2o_vmr(ds_earthcare):
 
 
 # %%
-def get_inputs(orbit_frame: str, skip_profiles: int = 5, low_reflectivity_threshold: float = -15):
+def get_inputs(
+    orbit_frame: str, skip_profiles: int = 5, low_reflectivity_threshold: float = -15
+):
     ds_xmet = ecio.load_XMET(
-            srcpath=data_paths.XMET,
-            frame_code=orbit_frame,
-            nested_directory_structure=True,
-        )
+        srcpath=data_paths.XMET,
+        frame_code=orbit_frame,
+        nested_directory_structure=True,
+    )
     ds_xmet.close()
     ds_cfmr = ecio.get_XMET(
         XMET=ds_xmet,
@@ -491,11 +532,15 @@ def get_inputs(orbit_frame: str, skip_profiles: int = 5, low_reflectivity_thresh
     # Remove profiles with all NaN or very low reflectivity
     nan_pressure = ds_cfmr["pressure"].isnull().all(dim="CPR_height")
     nan_height = ds_cfmr["height"].isnull().all(dim="CPR_height")
-    low_reflectivity = (ds_cfmr["reflectivity_corrected"].fillna(-999) < low_reflectivity_threshold).all(dim="CPR_height")
+    low_reflectivity = (
+        ds_cfmr["reflectivity_corrected"].fillna(-999) < low_reflectivity_threshold
+    ).all(dim="CPR_height")
     mask = ~(nan_pressure | nan_height | low_reflectivity)
 
     ds_cfmr_subset = ds_cfmr.where(mask, drop=True).isel(
-        along_track=slice(None, None, skip_profiles),  # skip every xth ray to reduce computation time
+        along_track=slice(
+            None, None, skip_profiles
+        ),  # skip every xth ray to reduce computation time
     )
 
     # reverse the height dimension so that pressure is increasing
@@ -533,7 +578,9 @@ def main(
             if os.path.exists(filename_save_ncdf):
                 existed_files += 1
     if existed_files == len(habit_list) * len(psd_list) and skip_existing:
-        print(f"All combinations of habit and PSD for orbit frame {orbit_frame} already exist. Skipping computation.")
+        print(
+            f"All combinations of habit and PSD for orbit frame {orbit_frame} already exist. Skipping computation."
+        )
         return None
 
     # Load Earthcare data
@@ -547,7 +594,9 @@ def main(
                 f"arts_TIR2_{orbit_frame}_{habit}_{psd}.nc",
             )
             if os.path.exists(filename_save_ncdf) & skip_existing:
-                print(f"File {filename_save_ncdf} already exists. Skipping computation.")
+                print(
+                    f"File {filename_save_ncdf} already exists. Skipping computation."
+                )
                 continue
 
             coef_mgd = (
@@ -574,10 +623,10 @@ def main(
                 futures = [
                     executor.submit(
                         cal_y_arts,
-                        ds_cfmr_subset.isel(along_track=i),
+                        ds_cfmr_subset.isel(along_track=i).load().copy(deep=True),
                         habit,
                         psd,
-                        coef_mgd,
+                        coef_mgd.copy() if coef_mgd is not None else None,
                     )
                     for i in range(len(ds_cfmr_subset.along_track))
                 ]
@@ -587,10 +636,26 @@ def main(
                     desc="process profiles",
                     file=sys.stdout,
                     dynamic_ncols=True,
+                    disable=False,
                 ):
                     da_y, _, _, da_auxiliary = f.result()
                     y.append(da_y)
                     auxiliary.append(da_auxiliary)
+
+            # for i in tqdm(
+            #     range(len(ds_cfmr_subset.along_track)),
+            #     desc="process profiles",
+            #     file=sys.stdout,
+            #     dynamic_ncols=True,
+            # ):
+            #     da_y, _, _, da_auxiliary = cal_y_arts(
+            #         ds_cfmr_subset.isel(along_track=i).load().copy(deep=True),
+            #         habit,
+            #         psd,
+            #         coef_mgd.copy() if coef_mgd is not None else None,
+            #     )
+            #     y.append(da_y)
+            #     auxiliary.append(da_auxiliary)
 
             print("ARTS simulation done.")
 
@@ -634,10 +699,20 @@ if __name__ == "__main__":
         srcpath=os.path.join(data_paths.MRGR, "*", "*", "*"),
         prodmod_code="ECA_EXBA",
     )
-    orbit_frame_list_CFMR = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_CFMR]
-    orbit_frame_list_XMET = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_XMET]
-    orbit_frame_list_MRGR = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_MRGR]
-    common_orbit_frame_list = list(set(orbit_frame_list_CFMR) & set(orbit_frame_list_XMET) & set(orbit_frame_list_MRGR))
+    orbit_frame_list_CFMR = [
+        f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_CFMR
+    ]
+    orbit_frame_list_XMET = [
+        f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_XMET
+    ]
+    orbit_frame_list_MRGR = [
+        f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_MRGR
+    ]
+    common_orbit_frame_list = list(
+        set(orbit_frame_list_CFMR)
+        & set(orbit_frame_list_XMET)
+        & set(orbit_frame_list_MRGR)
+    )
 
     # %% set up logging
     log_dir = os.path.join(
