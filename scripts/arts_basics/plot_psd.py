@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from pyarts.workspace import Workspace
 import pyarts.xml as xml
 import os
-from earthcare_ir import psd_list
+from earthcare_ir import PSD
 
 save = False
 
@@ -16,7 +16,7 @@ d_veq_Yang2016 = [getattr(M[i], "diameter_volume_equ", None) for i in range(len(
 
 
 def set_psd(ws, psd):
-    if psd == psd_list[0]:
+    if psd == PSD.D14:
         ws.psdDelanoeEtAl14(
             t_max=275,
             t_min=180,
@@ -25,7 +25,7 @@ def set_psd(ws, psd):
             alpha=-0.237,
             beta=1.839,
         )
-    elif psd == psd_list[1]:
+    elif psd == PSD.F07T:
         ws.psdFieldEtAl07(
             scat_species_a=0.02,
             scat_species_b=2,
@@ -33,7 +33,7 @@ def set_psd(ws, psd):
             # For low and high temperatures some parameters with default
             # values could matter
         )
-    elif psd == psd_list[2]:
+    elif psd == PSD.MDG:
         ws.psdModifiedGammaMass(
             scat_species_a=0.02,
             scat_species_b=2,
@@ -60,7 +60,7 @@ ws.pnd_agenda_input_names = ["FWC"]  # Name does not matter, just order!
 fig, ax = plt.subplots(1, 1, figsize=(3, 3))
 line_styles = ["-", "--", ":"]
 c = ["#0071B2FF", "#D55C00FF", "#009E74FF"]
-for i, psd in enumerate(psd_list):
+for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     set_psd(ws, psd)
     # Plot each column (temperature) separately with different line styles but same color
     for j, temp in enumerate(ws.pnd_agenda_input_t.value):
@@ -97,7 +97,7 @@ ws.pnd_agenda_input_t = np.array([260, 270])  # Temperature
 ws.pnd_agenda_input = np.array([[1e-3], [1e-3]])  # IWC in kg/m3
 ws.pnd_agenda_input_names = ["FWC"]  # Name does not matter, just order!
 
-psd = psd_list[0]
+psd = PSD.D14
 set_psd(ws, psd)
 
 plt.figure()
