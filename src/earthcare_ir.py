@@ -70,7 +70,7 @@ def cal_y_arts(ds_earthcare, habit_std, psd, coef_mgd=None):
 
     # Create a workspace
     ws = ea.wsInit(SpectralRegion.TIR)
-    ws.SetNumberOfThreads(nthreads=1)
+    ws.SetNumberOfThreads(nthreads=8)
 
     # Download ARTS catalogs if they are not already present.
     # pyarts.cat.download.retrieve()
@@ -687,32 +687,9 @@ def main(
 
 # %%
 if __name__ == "__main__":
-    filelist_CFMR = ecio.get_filelist(
-        srcpath=os.path.join(data_paths.CFMR, "*", "*", "*"),
-        prodmod_code="ECA_EXBA",
-    )
-    filelist_XMET = ecio.get_filelist(
-        srcpath=os.path.join(data_paths.XMET, "*", "*", "*"),
-        prodmod_code="ECA_EXAA",
-    )
-    filelist_MRGR = ecio.get_filelist(
-        srcpath=os.path.join(data_paths.MRGR, "*", "*", "*"),
-        prodmod_code="ECA_EXBA",
-    )
-    orbit_frame_list_CFMR = [
-        f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_CFMR
-    ]
-    orbit_frame_list_XMET = [
-        f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_XMET
-    ]
-    orbit_frame_list_MRGR = [
-        f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist_MRGR
-    ]
-    common_orbit_frame_list = list(
-        set(orbit_frame_list_CFMR)
-        & set(orbit_frame_list_XMET)
-        & set(orbit_frame_list_MRGR)
-    )
+    from data_paths import get_common_orbit_frame_list
+
+    common_orbit_frame_list = get_common_orbit_frame_list("2025", "07", "*")
 
     # %% set up logging
     log_dir = os.path.join(
@@ -738,10 +715,10 @@ if __name__ == "__main__":
             _ = main(
                 orbit_frame=orbit_frame,
                 skip_profiles=5,
-                habit_list=[Habit.Bullet, Habit.Column, Habit.Plate],
+                habit_list=[Habit.Column],
                 psd_list=[PSD.D14, PSD.MDG, PSD.F07T],
                 skip_existing=True,
-                max_workers=32,
+                max_workers=16,
                 save_results=True,
             )
             print(f"Finished orbit frame: {orbit_frame}")
