@@ -14,12 +14,12 @@ from data_paths import (
 
 # %% extract needed data
 pingyang_database = False  # True: PingYang database, False: Arts standard database
+habit = Habit.Column
 if pingyang_database:
     datafolder = single_scattering_database_PingYang
-    habit = map_habit[Habit.Bullet]  # habit name (string) in the database
+    habit = map_habit[habit]  # habit name (string) in the database
 else:
     datafolder = single_scattering_database_arts
-    habit = Habit.Bullet
 
 
 def get_ss_db_in_arts_format(datafolder: str, habit: str):
@@ -61,7 +61,7 @@ def get_da(
 
     data = get_attr(S, data_name)
     f_grid = get_attr(S, "f_grid")
-    shortest_f_grid_idx = np.argmin([len(f_grid[i]) for i in range(len(f_grid))])  # to remove some of the f_grid
+    longest_f_grid_idx = np.argmax([len(f_grid[i]) for i in range(len(f_grid))])  # pick the longest f_grid to be the common f_grid
     if add_za_sca_grid:
         za_grid = get_attr(S, "za_grid")
         longest_za_grid_idx = np.argmax(
@@ -88,9 +88,11 @@ def get_da(
                     "T_grid": ("T_grid", get_attr(S, "T_grid")[i]),
                 }
             )
-            .interp(
-                {"f_grid": f_grid[shortest_f_grid_idx]},
-                method="linear",  # interpolate to the shortest f_grid
+            .reindex(
+                {"f_grid": f_grid[longest_f_grid_idx]},
+                method="nearest",
+                tolerance=0.01e9,  # 10 MHz tolerance for frequency alignment
+                fill_value=np.nan,
             )
         )
 
@@ -119,7 +121,7 @@ def get_da(
         {
             "wavelength": (
                 "f_grid",
-                pyarts.arts.convert.freq2wavelen(f_grid[shortest_f_grid_idx]) * 1e6,
+                pyarts.arts.convert.freq2wavelen(f_grid[longest_f_grid_idx]) * 1e6,
             )
         }
     )
@@ -130,6 +132,15 @@ def get_da(
     da["mass"] = da["mass"].assign_attrs({"long_name": "Particle mass", "units": "kg"})
     return da
 
+def get_ab(d, m):
+    # keep only positive finite values
+    mask = np.isfinite(d) & np.isfinite(m) & (d > 0) & (m > 0)
+    d1 = d[mask]; m1 = m[mask]
+    logd = np.log(d1)
+    logm = np.log(m1)
+    b, loga = np.polyfit(logd, logm, 1)   # slope b, intercept loga
+    a = np.exp(loga)
+    return a, b
 
 # %
 # load single scattering database
@@ -183,6 +194,9 @@ phase_matrix = get_da(
     },
     add_za_sca_grid=True,
 )
+
+a,b = get_ab(xs_ext.d_veq, xs_ext.mass)
+
 # %%
 # Plottings
 
@@ -207,7 +221,7 @@ phase_matrix = get_da(
 #     }
 # )
 
-xs = xs_ext / (xs_ext.mass)
+xs = (xs_ext / (xs_ext.mass)).isel(f_grid=slice(0, -1))
 xs = xs.assign_attrs(
     {
         "long_name": "Extinction cross section normalized by mass",
@@ -228,7 +242,7 @@ xs = xs.assign_attrs(
 #     }
 # )
 fig, ax = plt.subplots(1, 1, figsize=(6, 4))
-skip_freq = 100 if pingyang_database else 3
+skip_freq = 100 if pingyang_database else 5
 xs.isel(
     f_grid=slice(None, None, skip_freq),
     T_grid=0,
@@ -243,17 +257,8 @@ xs.isel(
     add_legend=True,
     label=xs["f_grid"].data[::skip_freq] * 1e-9,
     ax=ax,
-)
-
-xs.sel(f_grid=660e9, method="nearest").isel(T_grid=0, za_inc_grid=0, aa_inc_grid=0, element=0).plot(
-    x="d_veq",
-    xscale="log",
-    yscale="log",
-    ax=ax,
-    ls="--",
-    c="k",
-    label=660,
-    add_legend=True,
+    ls="-",
+    marker=".",
 )
 
 # xs.swap_dims({"f_grid": "wavelength"}).sel(wavelength=10.8, method="nearest").isel(T_grid=0, za_inc_grid=0, aa_inc_grid=0, element=0).plot(
@@ -278,7 +283,39 @@ ax.figure.tight_layout()
 
 plt.show()
 
-# %% plot backscattering efficiency
+# %% plot turnover
+xs = (xs_ext / (xs_ext.mass)).drop_sel(f_grid=886.4e9).squeeze().isel(T_grid=2, size=slice(None, None, 5))
+xs = xs.assign_attrs(
+    {
+        "long_name": "Extinction cross section normalized by mass",
+        "units": "m2/kg",
+        "expression": "$ \sigma_{ext}/m$",
+        "habit": habit,
+        "source": datafolder,
+    }
+)
+xs["f_grid"] = xs["f_grid"].pipe(lambda x: x * 1e-9).assign_attrs({"units": "GHz", "long_name": "Frequency"})
+fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+xs.plot(
+    x="f_grid",
+    hue="d_veq",
+    ls="-",
+    marker=".",
+    xscale="linear",
+    yscale="linear",
+    ax=ax,
+    add_legend=True,
+    label=xs["d_veq"].data,
+)
+handles, labels = ax.get_legend_handles_labels()
+labels = [f"{float(l)*1e3:.1f} $mm$" for l in labels]
+ax.legend(handles, labels, title=f"{xs.attrs['habit']}")
+ax.grid()
+ax.set_title(f'{xs.attrs["long_name"]} at {xs["T_grid"].data:.0f} K')
+ax.set_ylabel(f'{xs.attrs["expression"]} [{xs.attrs["units"]}]')
+ax.figure.tight_layout()
+
+# %% plot backscattering phase matrix element
 fig, ax = plt.subplots(1, 1, figsize=(6, 4))
 phase_matrix.isel(
     f_grid=slice(None, None, skip_freq),
@@ -309,13 +346,15 @@ plt.show()
 
 
 # %% load psd
-def get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd):
+def get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd, scat_species_a=0.02, scat_species_b=2):
     psd_size_grid, psd_data = get_psd(
         fwc=fwc,
         t=t,
         psd=psd,
         psd_size_grid=psd_size_grid,
         mgd_coef=coef_mgd,
+        scat_species_a=scat_species_a,
+        scat_species_b=scat_species_b,
     )
     da_psd = xr.DataArray(
         data=psd_data,
@@ -350,7 +389,7 @@ fig, ax = plt.subplots(1, 1, figsize=(6, 4))
 for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
 
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
-    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd)
+    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd, scat_species_a=a, scat_species_b=b)
 
     # % plot PSD moment6
     l_6 = (
@@ -395,6 +434,54 @@ ax.set_title(f"{backscattering_efficiency.f_grid.data*1e-9:.1f} GHz\n fwc={fwc.i
 handles, labels = ax.get_legend_handles_labels()
 handles.append(l_6[0])
 labels.append("6th moment of n(D)")
+ax.legend(handles, labels, title=f"{habit}")
+ax.figure.tight_layout()
+ax.grid(True)
+plt.show()
+
+#%% psd-weighted mass
+psd_size_grid = xs_ext["d_veq"].data
+fwc = np.array([1e-3])  # IWC in kg/m3
+t = np.array([220])  # Temperature in K
+c = ["r", "g", "b"]
+fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
+    coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
+    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd)
+
+    # 3rd moment of psd
+    l_3 = (
+        (da_psd * da_psd["d_veq"] ** 3)
+        .pipe(lambda x: x / x.sum(dim="size"))
+        .plot(
+            x="d_veq",
+            hue="setting",
+            xscale="log",
+            yscale="linear",
+            ls=":",
+            c=c[i],
+            lw=5,
+            ax=ax,
+            add_legend=False,
+        )
+    )
+
+    # % plot mass weighted by PSD
+    mass_weighted = (da_psd * xs_ext.mass)
+    mass_weighted.pipe(lambda x: x / x.sum(dim="size")).plot(
+        x="d_veq",
+        hue="setting",
+        xscale="log",
+        yscale="linear",
+        label=psd,
+        c=c[i],
+        ls="-",
+        add_legend=True,
+        ax=ax,
+    )
+handles, labels = ax.get_legend_handles_labels()
+ax.set_ylabel("m * n(D) / norm")
+ax.set_title(f"Mass weighted by PSD\nfwc={fwc.item():.0e} kg/m3\nT={t.item():.0f} K")
 ax.legend(handles, labels, title=f"{habit}")
 ax.figure.tight_layout()
 ax.grid(True)
@@ -501,8 +588,8 @@ c = ["r", "g", "b"]
 fig, ax = plt.subplots(2, 1, figsize=(6, 4 * 2), sharex=False)
 for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
-    fwc = np.logspace(0, 2) * 1e-6  # IWC in kg/m3
-    t = 260  # Temperature in K
+    fwc = np.logspace(0, 3) * 1e-6  # IWC in kg/m3
+    t = 240  # Temperature in K
     da_psd = get_psd_dataarray(psd_size_grid, fwc, t * np.ones_like(fwc), psd, coef_mgd)
 
     psd_weighted_xs = (
@@ -514,7 +601,7 @@ for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     )
     psd_weighted_xs.integrate(coord="d_veq").pipe(lambda x: x / x.fwc).plot(
         x="fwc",
-        yscale="linear",
+        yscale="log",
         xscale="log",
         label=psd,
         c=c[i],
@@ -531,8 +618,8 @@ ax[0].set_title(
     f"{habit}, $\lambda$={xs_ext.wavelength.swap_dims({'f_grid':'wavelength'}).sel(wavelength=10.8,method='nearest').data:.1f} um"
 )
 ax[0].set_ylabel("$\int \sigma n(D) dD$/FWC [m2/kg]")
-ax[0].set_ylim([0, 200])
-ax[0].grid(True)
+# ax[0].set_ylim([0, 200])
+ax[0].grid(True, ls="--")
 ax[1].set_title("D_veq at max contribution to extinction (um)")
 ax[1].remove()
 fig.tight_layout()
