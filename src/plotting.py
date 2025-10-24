@@ -1,4 +1,5 @@
 # %%
+import os
 from cycler import cycler
 from earthcare_ir import get_cloud_top_T
 from matplotlib.colors import LogNorm
@@ -10,13 +11,14 @@ from earthcare_ir import habit_std_list, psd_list
 import xarray as xr
 import glob
 import xgboost as xgb
+import data_paths as dp
+import pandas as pd
+from ectools import ecio
 
 # ignore warnings from divide by zero encountered in log10
 import warnings
 
-warnings.filterwarnings(
-    "ignore", category=RuntimeWarning, message="divide by zero encountered in log10"
-)
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero encountered in log10")
 
 
 # %%
@@ -29,9 +31,7 @@ def load_ml_model_and_predict(ds_arts):
 
     # construct training data and make prediction
     orbit_frame = ds_arts.orbit_frame.data.item()
-    path_to_data = (
-        f"/home/anqil/earthcare/data/training_data/training_data_{orbit_frame}.nc"
-    )
+    path_to_data = f"/home/anqil/earthcare/data/training_data/training_data_{orbit_frame}.nc"
     ds = xr.open_dataset(path_to_data)
     ds = ds.set_xindex("time").sel(time=ds_arts.time)
     y_pred_ml = model.predict(xgb.DMatrix(ds.x))[:, 1]  # select only channel 1
@@ -85,9 +85,7 @@ def plot_fwc_and_temperatures(
     add_diff=False,
 ):
     if fwc_threshold is None and "cloud_top_T" not in ds:
-        raise ValueError(
-            "Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset."
-        )
+        raise ValueError("Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset.")
     if fwc_threshold is not None:
         ds = get_cloud_top_T(ds, fwc_threshold=fwc_threshold)
 
@@ -174,22 +172,12 @@ def plot_dBZ_fwc_IR(ds):
 
 
 # Calculate conditional probability
-def calculate_conditional_probabilities(
-    y_true, y_pred, bin_edges=np.arange(180, 280, 2)
-):
-    bin_means, _, binnumber = binned_statistic(
-        y_true, y_pred, statistic=np.nanmean, bins=bin_edges
-    )
-    bin_per90, _, _ = binned_statistic(
-        y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 90), bins=bin_edges
-    )
-    bin_per10, _, _ = binned_statistic(
-        y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 10), bins=bin_edges
-    )
+def calculate_conditional_probabilities(y_true, y_pred, bin_edges=np.arange(180, 280, 2)):
+    bin_means, _, binnumber = binned_statistic(y_true, y_pred, statistic=np.nanmean, bins=bin_edges)
+    bin_per90, _, _ = binned_statistic(y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 90), bins=bin_edges)
+    bin_per10, _, _ = binned_statistic(y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 10), bins=bin_edges)
 
-    h_joint_test_pred, _, _ = np.histogram2d(
-        y_true, y_pred, bins=bin_edges, density=True
-    )
+    h_joint_test_pred, _, _ = np.histogram2d(y_true, y_pred, bins=bin_edges, density=True)
     h_test, _ = np.histogram(y_true, bins=bin_edges, density=True)
     h_conditional = h_joint_test_pred / h_test.reshape(-1, 1)
     h_conditional_nan = np.where(h_conditional > 0, h_conditional, np.nan)
@@ -205,21 +193,13 @@ def plot_conditional_panel(
     h_conditional_nan,
     title,
     norm,
-    show_mbe=False,
-    mbe=None,
 ):
 
     bin_mid = (bin_edges[:-1] + bin_edges[1:]) / 2
     (l_mean,) = ax.plot(bin_mid, bin_means, label="Mean", c="lightgrey", ls="-", lw=3)
-    (l_per90,) = ax.plot(
-        bin_mid, bin_per90, label="90th percentile", c="lightgrey", ls=":", lw=2
-    )
-    (l_per10,) = ax.plot(
-        bin_mid, bin_per10, label="10th percentile", c="lightgrey", ls=":", lw=2
-    )
-    c = ax.pcolormesh(
-        bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", norm=norm
-    )
+    (l_per90,) = ax.plot(bin_mid, bin_per90, label="90th percentile", c="lightgrey", ls=":", lw=2)
+    (l_per10,) = ax.plot(bin_mid, bin_per10, label="10th percentile", c="lightgrey", ls=":", lw=2)
+    c = ax.pcolormesh(bin_edges, bin_edges, h_conditional_nan.T, cmap="Blues", norm=norm)
     ax.plot(
         [bin_mid[0], bin_mid[-1]],
         [bin_mid[0], bin_mid[-1]],
@@ -236,23 +216,9 @@ def plot_conditional_panel(
     )
     ax.set_xlim(bin_edges[0], bin_edges[-1])
     ax.set_ylim(bin_edges[0], bin_edges[-1])
-    ax.set_xlabel("True [K]")
-    ax.set_ylabel("Predicted [K]")
-    ax.set_title(f"{title}")
-    if show_mbe:
-        if mbe is not None:
-            pass
-        else:
-            raise ValueError("mbe must be provided if show_mbe is True")
-        ax.text(
-            250,
-            250,
-            f"Mean Bias Error:\n{mbe:.2f} K",
-            fontsize=11,
-            verticalalignment="top",
-            bbox=dict(facecolor="white", alpha=0.7, edgecolor="none"),
-        )
-    return c
+    ax.set_title(title)
+
+    return ax
 
 
 def extract_outliers_from_diagonal(
@@ -406,8 +372,8 @@ def plot_outliers_analysis(
     y_pred_clean = y_pred_flat[valid_mask]
 
     # Plot 1: 2D histogram with outliers highlighted
-    bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan = (
-        calculate_conditional_probabilities(y_true_clean, y_pred_clean, bin_edges)
+    bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan = calculate_conditional_probabilities(
+        y_true_clean, y_pred_clean, bin_edges
     )
     plot_conditional_panel(
         axes[0],
@@ -424,7 +390,6 @@ def plot_outliers_analysis(
         show_mbe=True,
         mbe=np.nanmean(y_pred_clean - y_true_clean),
     )
-    
 
     axes[0].scatter(
         outliers["y_true_outliers"],
@@ -461,9 +426,7 @@ def plot_outliers_analysis(
     axes[1].legend()
 
     # Plot 3: Outlier characteristics
-    axes[2].scatter(
-        outliers["y_true_outliers"], outliers["abs_residuals"], c="red", alpha=0.6, s=15
-    )
+    axes[2].scatter(outliers["y_true_outliers"], outliers["abs_residuals"], c="red", alpha=0.6, s=15)
     axes[2].axhline(
         outliers["threshold_used"],
         color="red",
@@ -488,7 +451,133 @@ def plot_outliers_analysis(
     return fig, axes, outliers
 
 
-# %% read output files
+# %% analysis on output data
+def load_and_merge_ec_data(
+    ds_arts,
+    merge_kwargs=dict(join="inner", overwrite_vars=["longitude", "latitude", "time"]),
+    verbose=False,
+):
+    orbit_frame = ds_arts.arts.attrs["CPR source"].split("_")[-1].split(".")[0]
+    ds_ec = xr.open_dataset(
+        os.path.join(dp.MRGR_TIR_aligned, f"CPR_MSI_merged_{orbit_frame}.nc"),
+        chunks="auto",
+    )
+
+    ds = ds_ec.merge(ds_arts, **merge_kwargs)
+
+    if verbose:
+        print("Merging EarthCare data and ARTS results done.")
+
+    return ds
+
+
+def load_arts_results(habit="*", psd="*", orbit_frame="*", verbose=False):
+    file_path_str = os.path.join(dp.arts_output_TIR2, f"arts_TIR2_{orbit_frame}_{habit}_{psd}.nc")
+    ds_arts = xr.open_mfdataset(
+        file_path_str,
+        combine="nested",
+        parallel=True,
+        chunks="auto",
+        preprocess=lambda ds: ds.assign_coords({"psd": (ds.arts.attrs["PSD"]), "habit": (ds.arts.attrs["habit"])}).expand_dims(
+            ["psd", "habit"]
+        ),
+    )
+    ds_arts.close()
+
+    if verbose:
+        print("Loading existing ARTS result done.")
+
+    return ds_arts
+
+
+def load_and_merge_acmcap_data(ds_arts, keep_vars=None, orbit_frame=None):
+    if orbit_frame is None:
+        try:
+            orbit_frame = ds_arts.orbit_frame.item()
+        except Exception as e:
+            raise ValueError("orbit_frame must be provided if not found in ds_arts encoding.") from e
+    ds_acmcap = (
+        ecio.load_ACMCAP(
+            srcpath=dp.ACMCAP,
+            product_baseline="BA",
+            frame_code=orbit_frame,
+            nested_directory_structure=True,
+        )
+        .swap_dims(along_track="time")
+        .reset_coords()
+    ).chunk("auto")
+    if keep_vars is not None:
+        ds_acmcap = ds_acmcap[keep_vars]
+    ds_acmcap.close()
+
+    ds_acmcap = ds_acmcap.rename({"MSI_longwave_channel": "band"}).assign({"band": ["TIR1", "TIR2", "TIR3"]})
+
+    ds_acmcap_re = ds_acmcap.reindex_like(ds_arts.swap_dims(along_track="time"), method="nearest", tolerance=pd.Timedelta("1s"))
+    ds_merged = ds_arts.swap_dims(along_track="time").merge(ds_acmcap_re, overwrite_vars=["along_track", "latitude", "longitude"])
+    ds_merged.attrs["ACMCAP source"] = ds_acmcap.encoding.get("source", "unknown").split("/")[-1]
+    return ds_merged.swap_dims(time="along_track")
+
+
+def get_bias(ds, var_name1, var_name2):
+    return (ds[var_name1] - ds[var_name2]).assign_attrs(
+        {
+            "long_name": f"{var_name1} - {var_name2} Bias",
+            "units": ds[var_name1].attrs.get("units"),
+        }
+    )
+
+
+def get_var_at_max_height_by_dbz(ds, threshold_dbz, var_name, dbz_name="reflectivity_corrected"):
+    cond = ds[dbz_name] > threshold_dbz
+
+    # ensure cond dims in order (CPR_height, along_track)
+    if cond.dims != ("CPR_height", "along_track"):
+        cond = cond.transpose("CPR_height", "along_track")
+
+    # which profiles have at least one True
+    has_cloud = cond.any(dim="CPR_height")
+
+    # integer index of first True along CPR_height (argmax returns first max)
+    idx_first = cond.argmax(dim="CPR_height")  # dtype=int, 0 if none True
+
+    # prepare temperature DataArray in same (CPR_height, along_track) ordering
+    var = ds[var_name]
+    if set(("CPR_height", "along_track")).issubset(var.dims) and var.dims != (
+        "CPR_height",
+        "along_track",
+    ):
+        var = var.transpose("CPR_height", "along_track")
+
+    # pick temperature at the CPR_height index for each time
+    var_at_first_true = var.isel(CPR_height=idx_first.load())
+
+    # mask out profiles that had no True so they become NaN
+    var_at_first_true = var_at_first_true.where(has_cloud, other=np.nan)
+
+    return var_at_first_true.assign_attrs(
+        {
+            "long_name": f"{var_name} at max height where {dbz_name} > {threshold_dbz} dBZ",
+            "units": ds[var_name].attrs.get("units"),
+            "dbz_threshold": threshold_dbz,
+        }
+    )
+
+
+def get_difference_by_dbzs(ds, threshold_dbzs, var_name):
+    var_at_max_heights = []
+    for threshold_dbz in threshold_dbzs:
+        var_at_max_heights.append(get_var_at_max_height_by_dbz(ds, threshold_dbz=threshold_dbz, var_name=var_name))
+    thickness = var_at_max_heights[0] - var_at_max_heights[1]
+    return thickness.assign_attrs(
+        {
+            "long_name": f"{var_name} Difference at max heights where {threshold_dbzs[0]} dBZ and {threshold_dbzs[1]} dBZ",
+            "units": ds[var_name].attrs.get("units"),
+            "dbz_thresholds": threshold_dbzs,
+        }
+    )
+
+
+# %% function deprecated, use load_arts_results instead
 def load_arts_output_data(
     habit_std_idx,
     psd_idx,
@@ -497,6 +586,7 @@ def load_arts_output_data(
     file_pattern=None,
     random_seed=42,
 ):
+    print("function deprecated, use load_arts_results instead")
     habit_std = habit_std_list[habit_std_idx]
     psd = psd_list[psd_idx]
     print(f"Habit: {habit_std}, PSD: {psd}")
@@ -504,9 +594,7 @@ def load_arts_output_data(
         orbit_frame = "*"  # Use wildcard to match all orbit frames
 
     if file_pattern is None:
-        raise ValueError(
-            "File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc"
-        )
+        raise ValueError("File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc")
     else:
         # Format the custom pattern with the available variables
         file_pattern = file_pattern.format(
@@ -522,10 +610,7 @@ def load_arts_output_data(
     orbits = [o[-9:-3] for o in matching_files]
     print(f"Number of matching files: {len(matching_files)}")
 
-    datasets = [
-        xr.open_dataset(f, chunks="auto").assign_coords(orbit_frame=f[-9:-3])
-        for f in matching_files
-    ]
+    datasets = [xr.open_dataset(f, chunks="auto").assign_coords(orbit_frame=f[-9:-3]) for f in matching_files]
     ds_arts = xr.concat(datasets, dim="nray").sortby("profileTime")
 
     return habit_std, psd, orbits, ds_arts
