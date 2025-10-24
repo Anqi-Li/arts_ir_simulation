@@ -439,7 +439,7 @@ ax.figure.tight_layout()
 ax.grid(True)
 plt.show()
 
-#%% psd-weighted mass
+#%% psd-weighted mass (bulk mass)
 psd_size_grid = xs_ext["d_veq"].data
 fwc = np.array([1e-3])  # IWC in kg/m3
 t = np.array([220])  # Temperature in K
@@ -447,7 +447,7 @@ c = ["r", "g", "b"]
 fig, ax = plt.subplots(1, 1, figsize=(6, 4))
 for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
-    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd)
+    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd, scat_species_a=a, scat_species_b=b)
 
     # 3rd moment of psd
     l_3 = (
@@ -493,11 +493,11 @@ fwc = np.array([10e-6])  # IWC in kg/m3
 t = np.array([260])  # Temperature in K
 c = ["r", "g", "b"]
 
-fig, ax = plt.subplots(2, 1, figsize=(6, 4 * 2), sharex=True)
+fig, ax = plt.subplots(4, 1, figsize=(6, 3 * 4), sharex=True)
 for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     # plot psd
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
-    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd)
+    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd, scat_species_a=a, scat_species_b=b)
     da_psd.plot(
         x="d_veq",
         hue="setting",
@@ -527,11 +527,7 @@ for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
 
     # % plot psd-weighted extinction cross section
     wavelength_to_plot = 10.8  # um
-    psd_weighted_xs = da_psd * (xs_ext).isel(
-        za_inc_grid=0,
-        aa_inc_grid=0,
-        element=0,
-    ).sel(T_grid=t, method="nearest").swap_dims(
+    psd_weighted_xs = da_psd * xs_ext.squeeze().sel(T_grid=t, method="nearest").swap_dims(
         {"f_grid": "wavelength"}
     ).sel(wavelength=wavelength_to_plot, method="nearest")
     l_ext = psd_weighted_xs.pipe(lambda x: x / x.sum(dim="size")).plot(
@@ -546,40 +542,50 @@ for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
         ax=ax[1],
     )
 
-    # psd_weighted_xs = da_psd * (xs_abs).isel(
-    #     za_inc_grid=0,
-    #     aa_inc_grid=0,
-    #     element=0,
-    # ).sel(T_grid=t, method="nearest").swap_dims({"f_grid": "wavelength"}).sel(
-    #     wavelength=wavelength_to_plot, method="nearest"
-    # )
-    # l_abs = psd_weighted_xs.pipe(lambda x: x).plot(
-    #     x="d_veq",
-    #     hue="setting",
-    #     xscale="log",
-    #     yscale="linear",
-    #     # label=psd,
-    #     c=c[i],
-    #     ls="--",
-    #     add_legend=False,
-    #     ax=ax[1],
-    # )
+    psd_weighted_mass = da_psd * (xs_abs.mass)
+    l_mass = psd_weighted_mass.pipe(lambda x: x / x.sum(dim="size")).plot(
+        x="d_veq",
+        hue="setting",
+        xscale="log",
+        yscale="linear",
+        # label=psd,
+        c=c[i],
+        ls="-",
+        add_legend=False,
+        ax=ax[2],
+    )
+
+    xs_ext.squeeze().sel(T_grid=t, method="nearest").swap_dims({"f_grid": "wavelength"}).sel(
+        wavelength=wavelength_to_plot, method="nearest"
+    ).pipe(lambda x: x / x.mass).plot(
+        x="d_veq",
+        hue="setting",
+        xscale="log",
+        yscale="linear",
+        c='k',
+        ls="-",
+        add_legend=False,
+        ax=ax[3],
+    )
 
 ax[0].set_ylim([1e6, 1e11])
 ax[0].set_ylabel("n(D)")
 ax[0].grid(True)
 
 ax[1].set_ylabel("$\sigma$ * n(D) / norm")
-ax[1].set_title(f"psd-weighted $\sigma$ at {psd_weighted_xs.wavelength.data:.1f} um\n habit: {habit}\nPSD: {psd}")
+ax[1].set_title(f"psd-weighted $\sigma$ at {psd_weighted_xs.wavelength.data:.1f} um")
 handles, labels = ax[1].get_legend_handles_labels()
-# handles.append(l_2[0])
-# labels.append("2nd moment of n(D)")
-# handles.append(l_abs[0])
-# labels.append(f"Absorption cross section")
-ax[1].legend(handles, labels, title=f"(T={t.item()-273:.0f}C, FWC={fwc.item()*1e6:.0f}mg/m3)")
+ax[1].legend(handles, labels, title=f"{habit}\nT={t.item()-273:.0f}C, FWC={fwc.item()*1e6:.0f}mg/m3")
 ax[1].figure.tight_layout()
 ax[1].grid(True)
 
+ax[2].set_ylabel("m * n(D) / norm")
+ax[2].set_title(f"psd-weighted mass")
+ax[2].grid(True)
+
+ax[3].set_ylabel(f"$\sigma$/m")
+ax[3].set_title(f"Extinction cross section normalized by mass")
+ax[3].grid(True)
 plt.show()
 
 # %% plot bulk extinction with varied fwc and fixed t
@@ -590,7 +596,7 @@ for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
     fwc = np.logspace(0, 3) * 1e-6  # IWC in kg/m3
     t = 240  # Temperature in K
-    da_psd = get_psd_dataarray(psd_size_grid, fwc, t * np.ones_like(fwc), psd, coef_mgd)
+    da_psd = get_psd_dataarray(psd_size_grid, fwc, t * np.ones_like(fwc), psd, coef_mgd, scat_species_a=a, scat_species_b=b)
 
     psd_weighted_xs = (
         xs_ext.isel(za_inc_grid=0, aa_inc_grid=0, element=0)
@@ -642,7 +648,7 @@ for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     # % plot psd-weighted cross section
     fwc = ds_onion_invtable.pipe(lambda x: 10**x).data.reshape(1)
     t = ds_onion_invtable.Temperature.data * np.ones_like(fwc)
-    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd)
+    da_psd = get_psd_dataarray(psd_size_grid, fwc, t, psd, coef_mgd,scat_species_a=a, scat_species_b=b)
     psd_weighted_xs = (
         (
             da_psd
