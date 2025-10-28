@@ -6,14 +6,11 @@ from matplotlib.colors import LogNorm
 from pyarts.workspace import Workspace
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import binned_statistic
 from earthcare_ir import habit_std_list, psd_list
 import xarray as xr
 import glob
 import xgboost as xgb
-import data_paths as dp
-import pandas as pd
-from ectools import ecio
+
 
 # ignore warnings from divide by zero encountered in log10
 import warnings
@@ -22,22 +19,19 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by ze
 
 
 # %%
-def load_ml_model_and_predict(ds_arts):
-    # Load ML model
-    model_tag = "all_orbits_20250101_20250501_seed42"
-    model = xgb.Booster()
-    model.load_model(f"/home/anqil/earthcare/data/xgb_regressor_{model_tag}.json")
-    print("Model loaded from file")
-
-    # construct training data and make prediction
-    orbit_frame = ds_arts.orbit_frame.data.item()
-    path_to_data = f"/home/anqil/earthcare/data/training_data/training_data_{orbit_frame}.nc"
-    ds = xr.open_dataset(path_to_data)
-    ds = ds.set_xindex("time").sel(time=ds_arts.time)
-    y_pred_ml = model.predict(xgb.DMatrix(ds.x))[:, 1]  # select only channel 1
-    return y_pred_ml
+def sci_formatter(x, pos):
+    if x == 0:
+        return "0"
+    exp = int(np.floor(np.log10(abs(x))))
+    coeff = x / 10**exp
+    if abs(coeff - 1.0) < 1e-8:  # exact power of ten
+        return rf"$10^{{{exp}}}$"
+    else:
+        # show coeff × 10^{exp}; round coeff for readability
+        return rf"${coeff:.2g}\times10^{{{exp}}}$"
 
 
+# %%
 def plot_psd_mgd(
     coefs_mgd: dict,
     psd_size_grid=np.linspace(1e-6, 50e-6),
@@ -78,112 +72,7 @@ def plot_psd_mgd(
     plt.show()
 
 
-def plot_fwc_and_temperatures(
-    ds,
-    fwc_threshold=None,
-    temperature_vars=["pixel_values", "cloud_top_T"],
-    add_diff=False,
-):
-    if fwc_threshold is None and "cloud_top_T" not in ds:
-        raise ValueError("Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset.")
-    if fwc_threshold is not None:
-        ds = get_cloud_top_T(ds, fwc_threshold=fwc_threshold)
-
-    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(12, 6), constrained_layout=True)
-    ds["frozen_water_content"].pipe(np.log10).plot(
-        ax=ax[0],
-        x="nray",
-        y="height_grid",
-        cmap="viridis",
-        cbar_kwargs={"label": "Frozen Water Content log10(kg/m^3)"},
-    )
-    if "cloud_top_height" in ds:
-        ds["cloud_top_height"].plot(
-            ax=ax[0],
-            x="nray",
-            label="Cloud Top Height",
-            color="orange",
-        )
-
-    ds[temperature_vars].to_array().plot.line(
-        ax=ax[1],
-        x="nray",
-        hue="variable",
-        add_legend=True,
-    )
-    if add_diff:
-        ax1_twinx = ax[1].twinx()
-        default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-        new_color_cycle = cycler(color=default_colors[1:])
-        ax1_twinx.set_prop_cycle(new_color_cycle)
-
-        ds[temperature_vars].to_array("diff").diff("diff").plot.line(
-            ax=ax1_twinx,
-            x="nray",
-            hue="diff",
-            add_legend=True,
-            linestyle="--",
-            alpha=0.5,
-        )
-        ax1_twinx.set_ylabel("Temperature Difference (K)")
-
-    ax[0].set_ylabel("Height (m)")
-    ax[0].set_title("Frozen Water Content")
-    ax[0].set_xlabel("")
-    ax[0].legend()
-    ax[1].set_xlabel("Ray Index")
-    ax[1].set_ylabel("Temperature (K)")
-    ax[1].set_title("Temperatures")
-
-    return fig, ax
-
-
-def plot_dBZ_IR(ds):
-    fig, axes = plt.subplots(2, 1, sharex=True, constrained_layout=True)
-    ds.surfaceElevation.plot(ax=axes[0], label="Surface Elevation", c="k", ls="--")
-    ds.dBZ.plot(ax=axes[0], x="nray", vmin=-30, vmax=30, cmap="viridis")
-    ds.arts.mean("f_grid").plot(ax=axes[1], label="ARTS")
-    ds.pixel_values.plot(ax=axes[1], label="MSI")
-    axes[0].set_ylabel("z [m]")
-    axes[0].legend(loc="upper left")
-    axes[1].legend(loc="upper left")
-
-    return fig, axes
-
-
-def plot_dBZ_fwc_IR(ds):
-    fig, axes = plt.subplots(3, 1, sharex=True, constrained_layout=True)
-    ds.surfaceElevation.plot(ax=axes[0], label="Surface Elevation", c="k", ls="--")
-    ds.dBZ.plot(ax=axes[0], x="nray", vmin=-30, vmax=30, cmap="viridis")
-    ds.frozen_water_content.pipe(np.log10).plot(
-        ax=axes[1],
-        x="nray",
-        vmin=-6,
-        vmax=-3,
-        cmap="viridis",
-        cbar_kwargs={"label": "FWC (log10 kg/m^3)"},
-    )
-    ds.arts.mean("f_grid").plot(ax=axes[2], label="ARTS")
-    ds.pixel_values.plot(ax=axes[2], label="MSI")
-    axes[0].set_ylabel("z [m]")
-    axes[0].legend(loc="upper left")
-    axes[2].legend(loc="upper left")
-    return fig, axes
-
-
-# Calculate conditional probability
-def calculate_conditional_probabilities(y_true, y_pred, bin_edges=np.arange(180, 280, 2)):
-    bin_means, _, binnumber = binned_statistic(y_true, y_pred, statistic=np.nanmean, bins=bin_edges)
-    bin_per90, _, _ = binned_statistic(y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 90), bins=bin_edges)
-    bin_per10, _, _ = binned_statistic(y_true, y_pred, statistic=lambda x: np.nanpercentile(x, 10), bins=bin_edges)
-
-    h_joint_test_pred, _, _ = np.histogram2d(y_true, y_pred, bins=bin_edges, density=True)
-    h_test, _ = np.histogram(y_true, bins=bin_edges, density=True)
-    h_conditional = h_joint_test_pred / h_test.reshape(-1, 1)
-    h_conditional_nan = np.where(h_conditional > 0, h_conditional, np.nan)
-    return bin_edges, bin_means, bin_per90, bin_per10, h_test, h_conditional_nan
-
-
+# %% conditional probability plots
 def plot_conditional_panel(
     ax,
     bin_edges,
@@ -221,6 +110,63 @@ def plot_conditional_panel(
     return ax
 
 
+
+
+# %% function deprecated, use load_arts_results instead
+def load_arts_output_data(
+    habit_std_idx,
+    psd_idx,
+    orbit_frame=None,
+    n_files=None,
+    file_pattern=None,
+    random_seed=42,
+):
+    print("function deprecated, use load_arts_results instead")
+    habit_std = habit_std_list[habit_std_idx]
+    psd = psd_list[psd_idx]
+    print(f"Habit: {habit_std}, PSD: {psd}")
+    if orbit_frame is None:
+        orbit_frame = "*"  # Use wildcard to match all orbit frames
+
+    if file_pattern is None:
+        raise ValueError("File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc")
+    else:
+        # Format the custom pattern with the available variables
+        file_pattern = file_pattern.format(
+            habit_std=habit_std,
+            psd=psd,
+            orbit_frame=orbit_frame,
+        )
+    matching_files = sorted(glob.glob(file_pattern))
+    if n_files is not None and len(matching_files) > n_files:
+        rng = np.random.default_rng(random_seed)
+        matching_files = rng.choice(matching_files, size=n_files, replace=False)
+        matching_files = matching_files.tolist()
+    orbits = [o[-9:-3] for o in matching_files]
+    print(f"Number of matching files: {len(matching_files)}")
+
+    datasets = [xr.open_dataset(f, chunks="auto").assign_coords(orbit_frame=f[-9:-3]) for f in matching_files]
+    ds_arts = xr.concat(datasets, dim="nray").sortby("profileTime")
+
+    return habit_std, psd, orbits, ds_arts
+
+
+def load_ml_model_and_predict(ds_arts, model_tag="all_orbits_20250101_20250501_seed42"):
+    # Load ML model
+    model = xgb.Booster()
+    model.load_model(f"/home/anqil/earthcare/data/xgb_regressor_{model_tag}.json")
+    print("Model loaded from file")
+
+    # construct training data and make prediction
+    orbit_frame = ds_arts.orbit_frame.data.item()
+    path_to_data = f"/home/anqil/earthcare/data/training_data/training_data_{orbit_frame}.nc"
+    ds = xr.open_dataset(path_to_data)
+    ds = ds.set_xindex("time").sel(time=ds_arts.time)
+    y_pred_ml = model.predict(xgb.DMatrix(ds.x))[:, 1]  # select only channel 1
+    return y_pred_ml
+
+
+# %%
 def extract_outliers_from_diagonal(
     y_true,
     y_pred,
@@ -451,179 +397,94 @@ def plot_outliers_analysis(
     return fig, axes, outliers
 
 
-# %% analysis on output data
-def load_and_merge_ec_data(
-    ds_arts,
-    merge_kwargs=dict(join="inner", overwrite_vars=["longitude", "latitude", "time"]),
-    verbose=False,
+def plot_fwc_and_temperatures(
+    ds,
+    fwc_threshold=None,
+    temperature_vars=["pixel_values", "cloud_top_T"],
+    add_diff=False,
 ):
-    orbit_frame = ds_arts.arts.attrs["CPR source"].split("_")[-1].split(".")[0]
-    ds_ec = xr.open_dataset(
-        os.path.join(dp.MRGR_TIR_aligned, f"CPR_MSI_merged_{orbit_frame}.nc"),
-        chunks="auto",
+    if fwc_threshold is None and "cloud_top_T" not in ds:
+        raise ValueError("Please provide a fwc_threshold or ensure 'cloud_top_T' is in the dataset.")
+    if fwc_threshold is not None:
+        ds = get_cloud_top_T(ds, fwc_threshold=fwc_threshold)
+
+    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(12, 6), constrained_layout=True)
+    ds["frozen_water_content"].pipe(np.log10).plot(
+        ax=ax[0],
+        x="nray",
+        y="height_grid",
+        cmap="viridis",
+        cbar_kwargs={"label": "Frozen Water Content log10(kg/m^3)"},
     )
-
-    ds = ds_ec.merge(ds_arts, **merge_kwargs)
-
-    if verbose:
-        print("Merging EarthCare data and ARTS results done.")
-
-    return ds
-
-
-def load_arts_results(habit="*", psd="*", orbit_frame="*", verbose=False):
-    file_path_str = os.path.join(dp.arts_output_TIR2, f"arts_TIR2_{orbit_frame}_{habit}_{psd}.nc")
-    ds_arts = xr.open_mfdataset(
-        file_path_str,
-        combine="nested",
-        parallel=True,
-        chunks="auto",
-        preprocess=lambda ds: ds.assign_coords({"psd": (ds.arts.attrs["PSD"]), "habit": (ds.arts.attrs["habit"])}).expand_dims(
-            ["psd", "habit"]
-        ),
-    )
-    ds_arts.close()
-
-    if verbose:
-        print("Loading existing ARTS result done.")
-
-    return ds_arts
-
-
-def load_and_merge_acmcap_data(ds_arts, keep_vars=None, orbit_frame=None):
-    if orbit_frame is None:
-        try:
-            orbit_frame = ds_arts.orbit_frame.item()
-        except Exception as e:
-            raise ValueError("orbit_frame must be provided if not found in ds_arts encoding.") from e
-    ds_acmcap = (
-        ecio.load_ACMCAP(
-            srcpath=dp.ACMCAP,
-            product_baseline="BA",
-            frame_code=orbit_frame,
-            nested_directory_structure=True,
+    if "cloud_top_height" in ds:
+        ds["cloud_top_height"].plot(
+            ax=ax[0],
+            x="nray",
+            label="Cloud Top Height",
+            color="orange",
         )
-        .swap_dims(along_track="time")
-        .reset_coords()
-    ).chunk("auto")
-    if keep_vars is not None:
-        ds_acmcap = ds_acmcap[keep_vars]
-    ds_acmcap.close()
 
-    ds_acmcap = ds_acmcap.rename({"MSI_longwave_channel": "band"}).assign({"band": ["TIR1", "TIR2", "TIR3"]})
-
-    ds_acmcap_re = ds_acmcap.reindex_like(ds_arts.swap_dims(along_track="time"), method="nearest", tolerance=pd.Timedelta("1s"))
-    ds_merged = ds_arts.swap_dims(along_track="time").merge(ds_acmcap_re, overwrite_vars=["along_track", "latitude", "longitude"])
-    ds_merged.attrs["ACMCAP source"] = ds_acmcap.encoding.get("source", "unknown").split("/")[-1]
-    return ds_merged.swap_dims(time="along_track")
-
-
-def get_bias(ds, var_name1, var_name2):
-    return (ds[var_name1] - ds[var_name2]).assign_attrs(
-        {
-            "long_name": f"{var_name1} - {var_name2} Bias",
-            "units": ds[var_name1].attrs.get("units"),
-        }
+    ds[temperature_vars].to_array().plot.line(
+        ax=ax[1],
+        x="nray",
+        hue="variable",
+        add_legend=True,
     )
+    if add_diff:
+        ax1_twinx = ax[1].twinx()
+        default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        new_color_cycle = cycler(color=default_colors[1:])
+        ax1_twinx.set_prop_cycle(new_color_cycle)
 
-
-def get_var_at_max_height_by_dbz(ds, threshold_dbz, var_name, dbz_name="reflectivity_corrected"):
-    cond = ds[dbz_name] > threshold_dbz
-
-    # ensure cond dims in order (CPR_height, along_track)
-    if cond.dims != ("CPR_height", "along_track"):
-        cond = cond.transpose("CPR_height", "along_track")
-
-    # which profiles have at least one True
-    has_cloud = cond.any(dim="CPR_height")
-
-    # integer index of first True along CPR_height (argmax returns first max)
-    idx_first = cond.argmax(dim="CPR_height")  # dtype=int, 0 if none True
-
-    # prepare temperature DataArray in same (CPR_height, along_track) ordering
-    var = ds[var_name]
-    if set(("CPR_height", "along_track")).issubset(var.dims) and var.dims != (
-        "CPR_height",
-        "along_track",
-    ):
-        var = var.transpose("CPR_height", "along_track")
-
-    # pick temperature at the CPR_height index for each time
-    var_at_first_true = var.isel(CPR_height=idx_first.load())
-
-    # mask out profiles that had no True so they become NaN
-    var_at_first_true = var_at_first_true.where(has_cloud, other=np.nan)
-
-    return var_at_first_true.assign_attrs(
-        {
-            "long_name": f"{var_name} at max height where {dbz_name} > {threshold_dbz} dBZ",
-            "units": ds[var_name].attrs.get("units"),
-            "dbz_threshold": threshold_dbz,
-        }
-    )
-
-
-def get_difference_by_dbzs(ds, threshold_dbzs, var_name):
-    var_at_max_heights = []
-    for threshold_dbz in threshold_dbzs:
-        var_at_max_heights.append(get_var_at_max_height_by_dbz(ds, threshold_dbz=threshold_dbz, var_name=var_name))
-    thickness = var_at_max_heights[0] - var_at_max_heights[1]
-    return thickness.assign_attrs(
-        {
-            "long_name": f"{var_name} Difference at max heights where {threshold_dbzs[0]} dBZ and {threshold_dbzs[1]} dBZ",
-            "units": ds[var_name].attrs.get("units"),
-            "dbz_thresholds": threshold_dbzs,
-        }
-    )
-
-
-# %% function deprecated, use load_arts_results instead
-def load_arts_output_data(
-    habit_std_idx,
-    psd_idx,
-    orbit_frame=None,
-    n_files=None,
-    file_pattern=None,
-    random_seed=42,
-):
-    print("function deprecated, use load_arts_results instead")
-    habit_std = habit_std_list[habit_std_idx]
-    psd = psd_list[psd_idx]
-    print(f"Habit: {habit_std}, PSD: {psd}")
-    if orbit_frame is None:
-        orbit_frame = "*"  # Use wildcard to match all orbit frames
-
-    if file_pattern is None:
-        raise ValueError("File pattern is required, such as path/to/data/high_fwp_5th_{habit_std}_{psd}_{orbit_frame}.nc")
-    else:
-        # Format the custom pattern with the available variables
-        file_pattern = file_pattern.format(
-            habit_std=habit_std,
-            psd=psd,
-            orbit_frame=orbit_frame,
+        ds[temperature_vars].to_array("diff").diff("diff").plot.line(
+            ax=ax1_twinx,
+            x="nray",
+            hue="diff",
+            add_legend=True,
+            linestyle="--",
+            alpha=0.5,
         )
-    matching_files = sorted(glob.glob(file_pattern))
-    if n_files is not None and len(matching_files) > n_files:
-        rng = np.random.default_rng(random_seed)
-        matching_files = rng.choice(matching_files, size=n_files, replace=False)
-        matching_files = matching_files.tolist()
-    orbits = [o[-9:-3] for o in matching_files]
-    print(f"Number of matching files: {len(matching_files)}")
+        ax1_twinx.set_ylabel("Temperature Difference (K)")
 
-    datasets = [xr.open_dataset(f, chunks="auto").assign_coords(orbit_frame=f[-9:-3]) for f in matching_files]
-    ds_arts = xr.concat(datasets, dim="nray").sortby("profileTime")
+    ax[0].set_ylabel("Height (m)")
+    ax[0].set_title("Frozen Water Content")
+    ax[0].set_xlabel("")
+    ax[0].legend()
+    ax[1].set_xlabel("Ray Index")
+    ax[1].set_ylabel("Temperature (K)")
+    ax[1].set_title("Temperatures")
 
-    return habit_std, psd, orbits, ds_arts
+    return fig, ax
 
 
-# %%
-def sci_formatter(x, pos):
-    if x == 0:
-        return "0"
-    exp = int(np.floor(np.log10(abs(x))))
-    coeff = x / 10**exp
-    if abs(coeff - 1.0) < 1e-8:  # exact power of ten
-        return rf"$10^{{{exp}}}$"
-    else:
-        # show coeff × 10^{exp}; round coeff for readability
-        return rf"${coeff:.2g}\times10^{{{exp}}}$"
+def plot_dBZ_IR(ds):
+    fig, axes = plt.subplots(2, 1, sharex=True, constrained_layout=True)
+    ds.surfaceElevation.plot(ax=axes[0], label="Surface Elevation", c="k", ls="--")
+    ds.dBZ.plot(ax=axes[0], x="nray", vmin=-30, vmax=30, cmap="viridis")
+    ds.arts.mean("f_grid").plot(ax=axes[1], label="ARTS")
+    ds.pixel_values.plot(ax=axes[1], label="MSI")
+    axes[0].set_ylabel("z [m]")
+    axes[0].legend(loc="upper left")
+    axes[1].legend(loc="upper left")
+
+    return fig, axes
+
+
+def plot_dBZ_fwc_IR(ds):
+    fig, axes = plt.subplots(3, 1, sharex=True, constrained_layout=True)
+    ds.surfaceElevation.plot(ax=axes[0], label="Surface Elevation", c="k", ls="--")
+    ds.dBZ.plot(ax=axes[0], x="nray", vmin=-30, vmax=30, cmap="viridis")
+    ds.frozen_water_content.pipe(np.log10).plot(
+        ax=axes[1],
+        x="nray",
+        vmin=-6,
+        vmax=-3,
+        cmap="viridis",
+        cbar_kwargs={"label": "FWC (log10 kg/m^3)"},
+    )
+    ds.arts.mean("f_grid").plot(ax=axes[2], label="ARTS")
+    ds.pixel_values.plot(ax=axes[2], label="MSI")
+    axes[0].set_ylabel("z [m]")
+    axes[0].legend(loc="upper left")
+    axes[2].legend(loc="upper left")
+    return fig, axes
