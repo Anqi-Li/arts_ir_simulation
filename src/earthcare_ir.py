@@ -365,34 +365,38 @@ def extract_xr_arrays(ds_earthcare, ws, scat_species):
     return da_y, da_bulkprop_field, da_vmr_field, da_auxiliary
 
 
-def get_frozen_water_content(ds_onion_invtable, ds_earthcare):
+def get_frozen_water_content(
+    ds_onion_invtable, ds_earthcare, reflectivity_varname="reflectivity_corrected"
+):
     lowest_dBZ_threshold = -30
-    ds_earthcare["reflectivity_corrected"] = ds_earthcare[
-        "reflectivity_corrected"
-    ].where(ds_earthcare["reflectivity_corrected"] >= lowest_dBZ_threshold)
+    ds_earthcare[reflectivity_varname] = ds_earthcare[reflectivity_varname].where(
+        ds_earthcare[reflectivity_varname] >= lowest_dBZ_threshold
+    )
 
     profile_fwc = (
         ds_onion_invtable.sel(radiative_properties="FWC")
         .interp(
             Temperature=ds_earthcare["temperature"],
-            dBZ=ds_earthcare["reflectivity_corrected"],
+            dBZ=ds_earthcare[reflectivity_varname],
         )
         .pipe(lambda x: 10**x)  # Convert from log10(FWC) to FWC in kg/m^3
         .fillna(0)
     )
 
     ds_earthcare = ds_earthcare.assign(
-        frozen_water_content=(
-            ds_earthcare.dims,
-            profile_fwc.where(
-                profile_fwc >= 0,
-                0,  # ensure no negative values
-            ).data,
-            dict(
-                long_name="Frozen Water Content",
-                units="kg m-3",
-            ),
-        )
+        {
+            "frozen_water_content": (
+                ds_earthcare.dims,
+                profile_fwc.where(
+                    profile_fwc >= 0,
+                    0,  # ensure no negative values
+                ).data,
+                dict(
+                    long_name="Frozen Water Content",
+                    units="kg m-3",
+                ),
+            )
+        }
     )
 
     return ds_earthcare
