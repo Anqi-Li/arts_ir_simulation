@@ -119,11 +119,11 @@ def get_psd_dataarray(
     d_name = varname_deq if psd == PSD.D14 else varname_dgeo
     da_psd = xr.DataArray(
         data=psd_data,
-        dims=["setting", "size"],
+        dims=["input_setting","size"],
         coords={
             d_name: ("size", psd_size_grid),
-            "fwc": ("setting", fwc),
-            "temperature": ("setting", t),
+            "fwc": ("input_setting", fwc),
+            "temperature": ("input_setting", t),
         },
         attrs={
             "long_name": "Particle size distribution",
@@ -143,7 +143,7 @@ def get_psd_dataarray(
     da_psd[d_name] = (
         da_psd[d_name].assign_attrs(
             {
-                "long_name": "Volume equivalent sphere diameter",
+                "long_name": "Equivalent sphere diameter",
                 "units": "m",
                 "density": rho,
             }
@@ -169,7 +169,7 @@ def get_psd_dataarray(
             varname_deq=varname_deq,
         )
 
-    return da_psd
+    return da_psd.transpose("input_setting","size")
 
 
 def convert_psd_dgeo2deq(
@@ -180,14 +180,16 @@ def convert_psd_dgeo2deq(
     varname_dgeo: str = "d_max",
     varname_deq: str = "d_meq",
 ) -> xr.DataArray:
-    from physics.unitconv import dgeo2deq
+    from easy_arts.size_dists import dgeo2deq_psd
 
     d_geo = da_psd[varname_dgeo].data
-    d_eq, ddgeo_ddeq = dgeo2deq(dgeo=d_geo, a=a, b=b, rho=rho)
+    d_eq, ddgeo_ddeq = dgeo2deq_psd(dgeo=d_geo, a=a, b=b, rho=rho)
+    d_eq = xr.DataArray(d_eq, coords={varname_dgeo: da_psd[varname_dgeo]}, dims=['size'])
+    ddgeo_ddeq = xr.DataArray(ddgeo_ddeq, coords={varname_dgeo: da_psd[varname_dgeo]}, dims=['size'])
     da_psd_converted = da_psd * ddgeo_ddeq
     da_psd_converted = da_psd_converted.assign_attrs(da_psd.attrs)
     da_psd_converted = da_psd_converted.assign_coords(
-        {varname_deq: ("size", d_eq)}
+        {varname_deq: ("size", d_eq.data)}
     ).drop_vars(varname_dgeo)
     da_psd_converted[varname_deq] = da_psd_converted[varname_deq].assign_attrs(
         {
@@ -198,6 +200,34 @@ def convert_psd_dgeo2deq(
     )
     return da_psd_converted
 
+def convert_psd_deq2dgeo(
+    da_psd: xr.DataArray,
+    a: float,
+    b: float,
+    rho: float = DENSITY_H2O_LIQUID,
+    varname_dgeo: str = "d_max",
+    varname_deq: str = "d_meq",
+) -> xr.DataArray:
+    from easy_arts.size_dists import deq2dgeo_psd
+
+    d_eq = da_psd[varname_deq].data
+    d_geo, ddeq_ddgeo = deq2dgeo_psd(deq=d_eq, a=a, b=b, rho=rho)
+    d_geo = xr.DataArray(d_geo, coords={varname_deq: da_psd[varname_deq]}, dims=['size'])
+    ddeq_ddgeo = xr.DataArray(ddeq_ddgeo, coords={varname_deq: da_psd[varname_deq]}, dims=['size'])
+    da_psd_converted = da_psd * ddeq_ddgeo
+    da_psd_converted = da_psd_converted.assign_attrs(da_psd.attrs)
+    da_psd_converted = da_psd_converted.assign_coords(
+        {varname_dgeo: ("size", d_geo.data)}
+    ).drop_vars(varname_deq)
+    da_psd_converted[varname_dgeo] = da_psd_converted[varname_dgeo].assign_attrs(
+        {
+            "long_name": "Maximum dimension",
+            "units": "m",
+            "a": a,
+            "b": b,
+        }
+    )
+    return da_psd_converted
 
 def align_psd_size_grids(
     da_psd: xr.DataArray,
@@ -246,64 +276,82 @@ def get_d0star(i, j, psd_data, size_grid):
 
 
 # %% F05, ACM_CAP PSD functions
-def psd_ACMCAP(n0star, d0star, dmeq):
-    x = dmeq / d0star
-    psd_data = n0star * psd_F05_norm(x)
-
+def psd_ACMCAP(dmax, d0star, n0star) -> xr.DataArray:
+    from easy_arts.size_dists import acm_cap_fwc2
     da_psd = xr.DataArray(
-        data=psd_data,
-        dims=["size"],
-        coords={"d_meq": ("size", dmeq)},
+        data=np.atleast_2d(acm_cap_fwc2(dmax=dmax, n0star=n0star, d0=d0star)),
+        dims=["input_setting","size"],
+        coords={"d_max": ("size", dmax), "n0star": ("input_setting", n0star), "d0star": ("input_setting", d0star)},
         attrs={
             "long_name": "Particle size distribution ACM_CAP",
             "units": "m-4",
             "psd_type": "ACM_CAP",
         },
     )
-    da_psd["d_meq"] = da_psd["d_meq"].assign_attrs(
-        {"long_name": "Melted equivalent sphere diameter", "units": "m"}
+    da_psd["d_max"] = da_psd["d_max"].assign_attrs(
+        {"long_name": "Maximum dimension", "units": "m"}
     )
-    return da_psd
-
-def psd_F05_norm(x):
-    # Following Field et al. (2005) Table 2 first row
-    lambda_0 = 20.78
-    lambda_1 = 3.29
-    nu = 0.6357
-    return 490.6 * np.exp(-lambda_0 * x) + 17.46 * (x**nu) * np.exp(-lambda_1 * x)
-
-
-def psd_F05_prior(dmeq, t, iwc):
-    n0star = get_n0star_prior_from_temperature(t=t)
-    d0star = get_d0star_from_n0star_iwc(n0star=n0star, iwc=iwc)
-    x = dmeq / d0star
-    return n0star * psd_F05_norm(x)
-
-
-def get_n0star_prior_from_temperature(t):
-    # Following Mason et al 2023 Table 1
-    t_c = t - 273.15
-    a_v = np.exp(-6.9 + 0.0315 * t_c)
-    n0prime = get_n0prime_prior_from_temperature(t)
-    return n0prime * a_v**0.6
+    return da_psd.transpose("input_setting","size")
+# def psd_ACMCAP(dmeq, iwc, n0star):
+    
+#     from easy_arts.size_dists import acm_cap_fwc
+#     psd_data = acm_cap_fwc(dmeq=dmeq, fwc=iwc, n0star=n0star)
+    
+#     da_psd = xr.DataArray(
+#         data=psd_data,
+#         dims=["size","input_setting"],
+#         coords={"d_meq": ("size", dmeq), "fwc": ("input_setting", iwc), "n0star": ("input_setting", n0star)},
+#         attrs={
+#             "long_name": "Particle size distribution ACM_CAP",
+#             "units": "m-4",
+#             "psd_type": "ACM_CAP",
+#         },
+#     )
+#     da_psd["d_meq"] = da_psd["d_meq"].assign_attrs(
+#         {"long_name": "Melted equivalent sphere diameter", "units": "m"}
+#     )
+#     return da_psd.transpose("input_setting","size")
 
 
-def get_n0prime_prior_from_temperature(t):
-    t_c = t - 273.15
-    return np.exp(16.118 - 0.1303 * t_c)
+# def psd_F05_norm(x):
+#     # Following Field et al. (2005) Table 2 first row
+#     lambda_0 = 20.78
+#     lambda_1 = 3.29
+#     nu = 0.6357
+#     return 490.6 * np.exp(-lambda_0 * x) + 17.46 * (x**nu) * np.exp(-lambda_1 * x)
 
 
-def get_d0star_from_n0star_iwc(iwc, n0star):
-    # Compute d0star from n0star and iwc
-    # Following Delanoë et al. (2014) Eq. (9)
-    # Using the relation: iwc = (pi/6) * rho * n0star * d0star^4 * C
-    # where C is a constant, arbitrarily chosen by Testud et al. (2001) to be equal to gamma(4)/4^4
+# def psd_F05_prior(dmeq, t, iwc):
+#     n0star = get_n0star_prior_from_temperature(t=t)
+#     d0star = get_d0star_from_n0star_iwc(n0star=n0star, iwc=iwc)
+#     x = dmeq / d0star
+#     return n0star * psd_F05_norm(x)
 
-    rho = 1000  # kg/m^3  # used in Delanoë et al. (2014)
-    # C = math.gamma(4) / 4**4  # constant from Testud et al. (2001)
-    C = 1
-    d0star = (6 * iwc / (np.pi * rho * n0star * C)) ** (1 / 4)
-    return d0star
+
+# def get_n0star_prior_from_temperature(t):
+#     # Following Mason et al 2023 Table 1
+#     t_c = t - 273.15
+#     a_v = np.exp(-6.9 + 0.0315 * t_c)
+#     n0prime = get_n0prime_prior_from_temperature(t)
+#     return n0prime * a_v**0.6
+
+
+# def get_n0prime_prior_from_temperature(t):
+#     t_c = t - 273.15
+#     return np.exp(16.118 - 0.1303 * t_c)
+
+
+# def get_d0star_from_n0star_iwc(iwc, n0star):
+#     # Compute d0star from n0star and iwc
+#     # Following Delanoë et al. (2014) Eq. (9)
+#     # Using the relation: iwc = (pi/6) * rho * n0star * d0star^4 * C
+#     # where C is a constant, arbitrarily chosen by Testud et al. (2001) to be equal to gamma(4)/4^4
+
+#     rho = 1000  # kg/m^3  # used in Delanoë et al. (2014)
+#     # C = math.gamma(4) / 4**4  # constant from Testud et al. (2001)
+#     C = 1
+#     d0star = (6 * iwc / (np.pi * rho * n0star * C)) ** (1 / 4)
+#     return d0star
 
 
 # %%
@@ -329,7 +377,7 @@ if __name__ == "__main__":
 
     da_psd.plot(
         x="d_veq",
-        hue="setting",
+        hue="input_setting",
         yscale="linear",
         xscale="log",
         add_legend=False,
@@ -351,7 +399,7 @@ if __name__ == "__main__":
             integrate=False,
         ).pipe(lambda x: x / x.max()).plot(
             x="d_veq",
-            hue="setting",
+            hue="input_setting",
             yscale="linear",
             xscale="log",
             label=f"{n}th moment",

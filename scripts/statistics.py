@@ -474,18 +474,19 @@ cbar.locator = LogLocator(base=10)
 cbar.update_ticks()
 cbar.formatter = FuncFormatter(sci_formatter)
 
-if show_thresholds := True:
+if show_thresholds := False:
     # show outlier thresholds
     threshold_residual = 20  # K
     for i in range(len(ax.flatten())):
         ax.flatten()[i].plot(bin_edges, bin_edges + threshold_residual, "r--", alpha=0.5)
         ax.flatten()[i].plot(bin_edges, bin_edges - threshold_residual, "r--", alpha=0.5)
 
-if show_warm_cold_line := True:
+if show_warm_cold_line := False:
     threshold_temp = 225  # K
     for i in range(len(ax.flatten())):
         ax.flatten()[i].axvline(threshold_temp, color="green", linestyle="--", alpha=0.5)
 
 ax[-1, -1].remove()  # turn off the last empty subplot
-
 # fig.tight_layout()
+
+# %%
