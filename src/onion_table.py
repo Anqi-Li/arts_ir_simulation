@@ -15,7 +15,7 @@ from select_habits import get_habit_list_from_path
 # %%
 
 
-def make_onion_invtable(habit, psd, coef_mgd=None):
+def make_onion_invtable(habit, psd, coef_mdg=None, return_xarray=False):
     """
     Create a radar onion inversion table for the given habit and PSD.
     """
@@ -43,18 +43,16 @@ def make_onion_invtable(habit, psd, coef_mgd=None):
         ea.scat_speciesDelanoeEtAl14(ws, name)
 
     elif psd == "FieldEtAl07TR":
-        ea.scat_speciesFieldEtAl07(ws, name, regime="TR")
+        ea.scat_speciesFieldEtAl07(ws, name, regime="TR", x_fit_start=0)
 
     elif psd == "FieldEtAl07ML":
-        ea.scat_speciesFieldEtAl07(ws, name, regime="ML")
+        ea.scat_speciesFieldEtAl07(ws, name, regime="ML", x_fit_start=0)
 
     elif psd == "ModifiedGamma":
         # Define an Modified Gamma PSD with varing lambda
-        if coef_mgd is None:
-            raise ValueError("coef_mgd must be provided for Modified Gamma PSD")
-        n0 = coef_mgd.get("n0", 1e6)
-        ga = coef_mgd.get("ga", 1)
-        ea.scat_speciesMgdMass(ws, name, n0=n0, mu=0, la=-999, ga=ga)
+        if coef_mdg is None or "n0" not in coef_mdg or "ga" not in coef_mdg or "mu" not in coef_mdg:
+            raise ValueError("coef_mdg must be provided for Modified Gamma PSD")
+        ea.scat_speciesMgdMass(ws, name, x_unit='dmax', n0=coef_mdg.get("n0"), mu=coef_mdg.get("mu"), la=-999, ga=coef_mdg.get("ga"))
 
     else:
         raise ValueError(f"PSD {psd} not handled")
@@ -72,8 +70,8 @@ def make_onion_invtable(habit, psd, coef_mgd=None):
     ws.VectorCreate("onion_dbze_grid")
     ws.VectorCreate("onion_t_grid")
     #
-    ws.VectorLinSpace(ws.onion_dbze_grid, -35, 20, 1)
-    ws.VectorLinSpace(ws.onion_t_grid, 180, 273, 1)  # neglect temperatures above 0 C
+    ws.VectorLinSpace(ws.onion_dbze_grid, -35, 20, 1) # dBZ grid
+    ws.VectorLinSpace(ws.onion_t_grid, 180, 273, 1)  # temperature grid
     #
     ws.RadarOnionPeelingTableCalc(
         invtable=ws.onion_invtable,
@@ -82,9 +80,13 @@ def make_onion_invtable(habit, psd, coef_mgd=None):
         wc_max=2e-2,
         dbze_grid=ws.onion_dbze_grid,
         t_grid=ws.onion_t_grid,
+        k2=0.75, # default value in EarthCARE and CloudSat
     )
 
-    return ws
+    if return_xarray:
+        return ws_to_ds_table(habit, psd, ws)
+    else:
+        return ws
 
 
 # %% table in a data array and extrapolate to a wider dbz range
@@ -113,20 +115,7 @@ def ws_to_ds_table(habit, psd, ws):
     ds_table.attrs["psd"] = psd
     return ds_table
 
-def get_ds_onion_invtable(habit, psd, coef_mgd=None):
-    """
-    Create a data array with the onion inversion table for the given habit and PSD.
-    """
-    ds_onion_invtable = ws_to_ds_table(
-    habit=habit,
-    psd=psd,
-    ws=make_onion_invtable(
-        habit=habit,
-        psd=psd,
-        coef_mgd=coef_mgd,
-    ),
-)
-    return ds_onion_invtable
+
 # %%
 def plot_table(ds_table):
     plt.figure()

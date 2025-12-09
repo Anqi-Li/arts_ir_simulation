@@ -168,12 +168,12 @@ if False:
     )
 
 # %% Get FWC from onion inversion table
-from onion_table import get_ds_onion_invtable
+from onion_table import make_onion_invtable
 
 fwcs = []
 for psd_type in [PSD.D14, PSD.F07T, PSD.MDG]:
     for habit in ["LargeColumnAggregate", Habit.Plate]:
-        ds_onion_table = get_ds_onion_invtable(
+        ds_onion_table = make_onion_invtable(
             habit=habit,
             psd=psd_type,
             coef_mgd=(
@@ -185,6 +185,7 @@ for psd_type in [PSD.D14, PSD.F07T, PSD.MDG]:
                 if psd_type == PSD.MDG
                 else None
             ),
+            return_xarray=True,
         )
         fwc = (
             ds_onion_table.sel(radiative_properties="FWC")

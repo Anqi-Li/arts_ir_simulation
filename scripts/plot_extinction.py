@@ -442,7 +442,7 @@ ax[1].set_title("D_veq at max contribution to extinction (um)")
 ax[1].remove()
 fig.tight_layout()
 # %% plot psd from fixed dbz
-from onion_table import get_ds_onion_invtable
+from onion_table import make_onion_invtable
 
 psd_size_grid = xs_ext["d_veq"].data
 fig, ax = plt.subplots(2, 1, figsize=(6, 4 * 2), sharex=True)
@@ -451,10 +451,11 @@ for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     # psd = PSD.D14
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
 
-    ds_onion_invtable = get_ds_onion_invtable(
+    ds_onion_invtable = make_onion_invtable(
         habit=Habit.Bullet,
         psd=psd,
-        coef_mgd=coef_mgd,
+        coef_mdg=coef_mgd,
+        return_xarray=True,
     ).sel(radiative_properties="FWC", Temperature=[220], dBZ=[-20])
 
     # % plot psd-weighted cross section
@@ -538,10 +539,11 @@ fig, ax = plt.subplots(1, 1, figsize=(6, 4))
 for i, psd in enumerate([PSD.D14, PSD.F07T, PSD.MDG]):
     coef_mgd = {"n0": 1e10, "ga": 1.5, "mu": 0} if psd == PSD.MDG else None
     ds_onion_invtable = (
-        get_ds_onion_invtable(
+        make_onion_invtable(
             habit=Habit.Bullet,
             psd=psd,
-            coef_mgd=coef_mgd,
+            coef_mdg=coef_mgd,
+            return_xarray=True,
         )
         .sel(radiative_properties="FWC", Temperature=210)
         .isel(dBZ=slice(None, None, 5))

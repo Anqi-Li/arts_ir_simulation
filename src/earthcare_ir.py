@@ -15,7 +15,7 @@ from easy_arts.data_model import (
 )
 from physics.constants import DENSITY_H2O_LIQUID
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from onion_table import *
+from onion_table import make_onion_invtable
 from physics.unitconv import (
     mixing_ratio2mass_conc,
     specific_humidity2h2o_p,
@@ -615,7 +615,7 @@ def main(
 
             # Invertion to get frozen water content
             ds_cfmr_subset = get_frozen_water_content(
-                get_ds_onion_invtable(habit=habit, psd=psd, coef_mgd=coef_mgd),
+                make_onion_invtable(habit=habit, psd=psd, coef_mdg=coef_mgd, return_xarray=True),
                 ds_cfmr_subset,
             )
             print("FWC inversion done.")

@@ -16,7 +16,7 @@ from easy_arts.data_model import (
 )
 from earthcare_ir import insert_bulkprop_from_earthcare, get_frozen_water_content
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from onion_table import *
+from onion_table import make_onion_invtable
 
 habit_std_list = ["LargePlateAggregate", "8-ColumnAggregate", "6-BulletRosette"]
 psd_list = ["DelanoeEtAl14", "FieldEtAl07TR", "Exponential"]
@@ -230,10 +230,11 @@ if __name__ == "__main__":
         }
     else:
         coef_mgd = None
-    ds_onion_invtable = get_ds_onion_invtable(
+    ds_onion_invtable = make_onion_invtable(
         habit=habit_std,
         psd=psd,
-        coef_mgd=coef_mgd,
+        coef_mdg=coef_mgd,
+        return_xarray=True,
     )
 
     
