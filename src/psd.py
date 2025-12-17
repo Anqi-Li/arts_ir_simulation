@@ -4,172 +4,289 @@ import numpy as np
 from earthcare_ir import PSD
 import xarray as xr
 from physics.constants import DENSITY_H2O_ICE, DENSITY_H2O_LIQUID
-
+import easy_arts as ea
+import data_paths as dp
 
 # %%
-def set_ws_psd(
-    ws,
-    psd,
-    mgd_coef=None,
-    scat_species_a=0.02,
-    scat_species_b=2,
-    rho=1000,
+def get_psd_fwc(
+    fwc: np.ndarray,
+    t: np.ndarray,
+    psd_size_grid: np.ndarray,
+    psd_type: PSD,
+    scat_species_a: None,
+    scat_species_b: None,
+    rho: float = DENSITY_H2O_ICE,
+    coef_mdg: dict = None,
 ):
-    if psd == PSD.D14:
-        ws.psdDelanoeEtAl14(
-            t_max=275,
-            t_min=180,
-            n0Star=-999,  # calculated from temperature internally
-            Dm=-999,
-            alpha=-0.237,  # can be changed to other DARDAR version values if needed
-            beta=1.839,
-            rho=rho,
-        )
-    elif psd == PSD.F07T:
-        ws.psdFieldEtAl07(
-            scat_species_a=scat_species_a,
-            scat_species_b=scat_species_b,
-            regime="TR",
-        )
-    elif psd == PSD.F07M:
-        ws.psdFieldEtAl07(
-            scat_species_a=scat_species_a,
-            scat_species_b=scat_species_b,
-            regime="ML",
-        )
-    elif psd == PSD.MDG:
-        if mgd_coef is not None:
-            n0 = mgd_coef.get("n0")
-            ga = mgd_coef.get("ga")
-            mu = mgd_coef.get("mu")
-        else:
-            raise ValueError(
-                "For PSD.MDG, mgd_coef must be provided as a dict with keys 'n0', 'ga', 'mu'"
-            )
-        ws.psdModifiedGammaMass(
-            scat_species_a=scat_species_a,
-            scat_species_b=scat_species_b,
-            n0=n0,
-            ga=ga,
-            mu=mu,
-            la=-999,
-            t_max=373,
-            t_min=0,
-        )
-    else:
-        raise ValueError(f"PSD {psd} not handled")
-
-
-def get_ws_psd(
-    fwc: np.array = None,
-    t: np.array = None,
-    psd=None,
-    psd_size_grid=np.logspace(-6, -2, 100),
-    mgd_coef=None,
-    scat_species_a=0.02,
-    scat_species_b=2,
-    rho=1000,
-):
-    if isinstance(fwc, np.ndarray) and isinstance(t, np.ndarray) and len(fwc) != len(t):
-        raise ValueError("fwc and t must have the same length")
-    elif isinstance(fwc, float) and isinstance(t, float):
-        fwc = np.array([fwc])
-        t = np.array([t])
     ws = Workspace(verbosity=0)
     ws.dpnd_data_dx_names = []
     ws.psd_size_grid = psd_size_grid  # Particle size grid in meters
     ws.pnd_agenda_input_t = t  # Temperature
     ws.pnd_agenda_input = fwc.reshape(-1, 1)  # FWC in kg/m3
     ws.pnd_agenda_input_names = ["FWC"]  # Name does not matter, just order!
-    set_ws_psd(
-        ws,
-        psd,
-        mgd_coef=mgd_coef,
-        scat_species_a=scat_species_a,
-        scat_species_b=scat_species_b,
-        rho=rho,
-    )
+    if psd_type == PSD.D14:
+        ws.psdDelanoeEtAl14(
+                t_max=275,
+                t_min=180,
+                n0Star=-999,  # calculated from temperature internally
+                Dm=-999,
+                alpha=-0.237,  # can be changed to other DARDAR version values if needed
+                beta=1.839,
+                rho=rho,
+                picky=1,
+            )
+        da_psd = xr.DataArray(
+            data=ws.psd_data.value,
+            dims=["inputs", "size"],
+            coords={
+            "fwc": ("inputs", fwc),
+            "temperature": ("inputs", t),
+            "d_veq": ("size", psd_size_grid),
+            },
+            attrs={"psd_type": psd_type},
+            )
+    elif psd_type == PSD.F07T:
+        ws.psdFieldEtAl07(
+                scat_species_a=scat_species_a,
+                scat_species_b=scat_species_b,
+                regime="TR",
+                picky=1,
+            )
+        da_psd = xr.DataArray(
+            data=ws.psd_data.value,
+            dims=["inputs", "size"],
+            coords={
+            "fwc": ("inputs", fwc),
+            "temperature": ("inputs", t),
+            "d_max": ("size", psd_size_grid),
+            },
+            attrs={"psd_type": psd_type, "a":scat_species_a, "b": scat_species_b},
+            )
+    elif psd_type == PSD.F07M:
+        ws.psdFieldEtAl07(
+                scat_species_a=scat_species_a,
+                scat_species_b=scat_species_b,
+                regime="ML",
+                picky=1,
+            )
+        da_psd = xr.DataArray(
+            data=ws.psd_data.value,
+            dims=["inputs", "size"],
+            coords={
+            "fwc": ("inputs", fwc),
+            "temperature": ("inputs", t),
+            "d_max": ("size", psd_size_grid),
+            },
+            attrs={"psd_type": psd_type, "a":scat_species_a, "b": scat_species_b},
+            )
+    elif psd_type == PSD.MDG:
+        if coef_mdg is None or coef_mdg.get("n0") is None or coef_mdg.get("ga") is None or coef_mdg.get("mu") is None:
+                raise ValueError(
+                    "For PSD.MDG, coef_mdg must be provided as a dict with keys 'n0', 'ga', 'mu'"
+                )
+        ws.psdModifiedGammaMass(
+            scat_species_a=scat_species_a,
+            scat_species_b=scat_species_b,
+            n0 = coef_mdg.get("n0"),
+            ga = coef_mdg.get("ga"),
+            mu = coef_mdg.get("mu"),
+            la=-999,
+            t_max=373,
+            t_min=0,
+            picky=1,
+        )
+        da_psd = xr.DataArray(
+            data=ws.psd_data.value,
+            dims=["inputs", "size"],
+            coords={
+            "fwc": ("inputs", fwc),
+            "temperature": ("inputs", t),
+            "d_max": ("size", psd_size_grid),
+            },
+            attrs={
+                 "psd_type": psd_type, 
+                 "a":scat_species_a, 
+                 "b": scat_species_b, 
+                 "mdg_n0": coef_mdg.get("n0"), 
+                 "mdg_ga": coef_mdg.get("ga"), 
+                 "mdg_mu": coef_mdg.get("mu")},
+            )
+    else:
+        raise ValueError(f"PSD {psd_type} not handled")
 
-    return ws.psd_size_grid.value, ws.psd_data.value
+    return da_psd
+
+def get_species_mass_size_info(folder: str = dp.single_scattering_database_arts, habit: str=None, x_fit_start: float=100e-6):
+    ws = ea.easy_arts.wsInit()
+    ws.stdhabits_folder = folder
+    ea.easy_arts.scat_data_rawAppendStdHabit(ws, habit=habit)
+    ws.ScatSpeciesSizeMassInfo(species_index=0, x_unit='dmax', x_fit_start=x_fit_start)
+    return ws.scat_species_a.value.value, ws.scat_species_b.value.value
 
 
-def get_psd_dataarray(
-    psd_size_grid: np.ndarray,
-    fwc: np.ndarray,
-    t: np.ndarray,
-    psd: str,
-    coef_mgd: dict = None,
-    scat_species_a: float = None,
-    scat_species_b: float = None,
-    convert_to_deq: bool = False,
-    rho: float = DENSITY_H2O_LIQUID,
-    varname_dgeo: str = "d_max",
-    varname_deq: str = "d_meq",
-) -> xr.DataArray:
+# def set_ws_psd(
+#     ws,
+#     psd,
+#     mgd_coef=None,
+#     scat_species_a=0.02,
+#     scat_species_b=2,
+#     rho=1000,
+# ):
+#     if psd == PSD.D14:
+#         ws.psdDelanoeEtAl14(
+#             t_max=275,
+#             t_min=180,
+#             n0Star=-999,  # calculated from temperature internally
+#             Dm=-999,
+#             alpha=-0.237,  # can be changed to other DARDAR version values if needed
+#             beta=1.839,
+#             rho=rho,
+#         )
+#     elif psd == PSD.F07T:
+#         ws.psdFieldEtAl07(
+#             scat_species_a=scat_species_a,
+#             scat_species_b=scat_species_b,
+#             regime="TR",
+#         )
+#     elif psd == PSD.F07M:
+#         ws.psdFieldEtAl07(
+#             scat_species_a=scat_species_a,
+#             scat_species_b=scat_species_b,
+#             regime="ML",
+#         )
+#     elif psd == PSD.MDG:
+#         if mgd_coef is not None:
+#             n0 = mgd_coef.get("n0")
+#             ga = mgd_coef.get("ga")
+#             mu = mgd_coef.get("mu")
+#         else:
+#             raise ValueError(
+#                 "For PSD.MDG, mgd_coef must be provided as a dict with keys 'n0', 'ga', 'mu'"
+#             )
+#         ws.psdModifiedGammaMass(
+#             scat_species_a=scat_species_a,
+#             scat_species_b=scat_species_b,
+#             n0=n0,
+#             ga=ga,
+#             mu=mu,
+#             la=-999,
+#             t_max=373,
+#             t_min=0,
+#         )
+#     else:
+#         raise ValueError(f"PSD {psd} not handled")
+
+
+# def get_ws_psd(
+#     fwc: np.array = None,
+#     t: np.array = None,
+#     psd=None,
+#     psd_size_grid=np.logspace(-6, -2, 100),
+#     mgd_coef=None,
+#     scat_species_a=0.02,
+#     scat_species_b=2,
+#     rho=1000,
+# ):
+#     if isinstance(fwc, np.ndarray) and isinstance(t, np.ndarray) and len(fwc) != len(t):
+#         raise ValueError("fwc and t must have the same length")
+#     elif isinstance(fwc, float) and isinstance(t, float):
+#         fwc = np.array([fwc])
+#         t = np.array([t])
+#     ws = Workspace(verbosity=0)
+#     ws.dpnd_data_dx_names = []
+#     ws.psd_size_grid = psd_size_grid  # Particle size grid in meters
+#     ws.pnd_agenda_input_t = t  # Temperature
+#     ws.pnd_agenda_input = fwc.reshape(-1, 1)  # FWC in kg/m3
+#     ws.pnd_agenda_input_names = ["FWC"]  # Name does not matter, just order!
+#     set_ws_psd(
+#         ws,
+#         psd,
+#         mgd_coef=mgd_coef,
+#         scat_species_a=scat_species_a,
+#         scat_species_b=scat_species_b,
+#         rho=rho,
+#     )
+
+#     return ws.psd_size_grid.value, ws.psd_data.value
+
+
+# def get_psd_dataarray(
+#     psd_size_grid: np.ndarray,
+#     fwc: np.ndarray,
+#     t: np.ndarray,
+#     psd: str,
+#     coef_mgd: dict = None,
+#     scat_species_a: float = None,
+#     scat_species_b: float = None,
+#     convert_to_deq: bool = False,
+#     rho: float = DENSITY_H2O_LIQUID,
+#     varname_dgeo: str = "d_max",
+#     varname_deq: str = "d_meq",
+# ) -> xr.DataArray:
     
-    psd_size_grid, psd_data = get_ws_psd(
-        fwc=fwc,
-        t=t,
-        psd=psd,
-        psd_size_grid=psd_size_grid,
-        mgd_coef=coef_mgd,
-        scat_species_a=scat_species_a,
-        scat_species_b=scat_species_b,
-    )
-    d_name = varname_deq if psd == PSD.D14 else varname_dgeo
-    da_psd = xr.DataArray(
-        data=psd_data,
-        dims=["input_setting","size"],
-        coords={
-            d_name: ("size", psd_size_grid),
-            "fwc": ("input_setting", fwc),
-            "temperature": ("input_setting", t),
-        },
-        attrs={
-            "long_name": "Particle size distribution",
-            "units": "m-4",
-            "psd_type": psd,
-            "coef_mgd": str(coef_mgd) if psd == PSD.MDG else "N/A",
-            "a": scat_species_a if psd != PSD.D14 else "N/A",
-            "b": scat_species_b if psd != PSD.D14 else "N/A",
-        },
-    )
-    da_psd["fwc"] = da_psd["fwc"].assign_attrs(
-        {"long_name": "Ice water content", "units": "kg/m3"}
-    )
-    da_psd["temperature"] = da_psd["temperature"].assign_attrs(
-        {"long_name": "Temperature", "units": "K"}
-    )
-    da_psd[d_name] = (
-        da_psd[d_name].assign_attrs(
-            {
-                "long_name": "Equivalent sphere diameter",
-                "units": "m",
-                "density": rho,
-            }
-        )
-        if psd == PSD.D14
-        else da_psd[d_name].assign_attrs(
-            {
-                "long_name": "Maximum dimension",
-                "units": "m",
-                "a": scat_species_a,
-                "b": scat_species_b,
-            }
-        )
-    )
+#     psd_size_grid, psd_data = get_ws_psd(
+#         fwc=fwc,
+#         t=t,
+#         psd=psd,
+#         psd_size_grid=psd_size_grid,
+#         mgd_coef=coef_mgd,
+#         scat_species_a=scat_species_a,
+#         scat_species_b=scat_species_b,
+#     )
+#     d_name = varname_deq if psd == PSD.D14 else varname_dgeo
+#     da_psd = xr.DataArray(
+#         data=psd_data,
+#         dims=["input_setting","size"],
+#         coords={
+#             d_name: ("size", psd_size_grid),
+#             "fwc": ("input_setting", fwc),
+#             "temperature": ("input_setting", t),
+#         },
+#         attrs={
+#             "long_name": "Particle size distribution",
+#             "units": "m-4",
+#             "psd_type": psd,
+#             "coef_mgd": str(coef_mgd) if psd == PSD.MDG else "N/A",
+#             "a": scat_species_a if psd != PSD.D14 else "N/A",
+#             "b": scat_species_b if psd != PSD.D14 else "N/A",
+#         },
+#     )
+#     da_psd["fwc"] = da_psd["fwc"].assign_attrs(
+#         {"long_name": "Ice water content", "units": "kg/m3"}
+#     )
+#     da_psd["temperature"] = da_psd["temperature"].assign_attrs(
+#         {"long_name": "Temperature", "units": "K"}
+#     )
+#     da_psd[d_name] = (
+#         da_psd[d_name].assign_attrs(
+#             {
+#                 "long_name": "Equivalent sphere diameter",
+#                 "units": "m",
+#                 "density": rho,
+#             }
+#         )
+#         if psd == PSD.D14
+#         else da_psd[d_name].assign_attrs(
+#             {
+#                 "long_name": "Maximum dimension",
+#                 "units": "m",
+#                 "a": scat_species_a,
+#                 "b": scat_species_b,
+#             }
+#         )
+#     )
 
-    if convert_to_deq and psd != PSD.D14:
-        da_psd = convert_psd_dgeo2deq(
-            da_psd,
-            a=scat_species_a,
-            b=scat_species_b,
-            rho=rho,
-            varname_dgeo=varname_dgeo,
-            varname_deq=varname_deq,
-        )
+#     if convert_to_deq and psd != PSD.D14:
+#         da_psd = convert_psd_dgeo2deq(
+#             da_psd,
+#             a=scat_species_a,
+#             b=scat_species_b,
+#             rho=rho,
+#             varname_dgeo=varname_dgeo,
+#             varname_deq=varname_deq,
+#         )
 
-    return da_psd.transpose("input_setting","size")
+#     return da_psd.transpose("input_setting","size")
 
 
 def convert_psd_dgeo2deq(

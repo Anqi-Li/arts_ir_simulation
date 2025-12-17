@@ -8,20 +8,28 @@ import data_paths
 from scipy.interpolate import NearestNDInterpolator
 
 # %% take an earthcare input dataset
-orbit_frame = "06554E"
+orbit_frame = "06356H"
 
-run_arts = False
+run_arts = True
 if run_arts:
-    # run ARTS simulation for one orbit
-    ds_arts = main(
-        orbit_frame=orbit_frame,
-        habit_list=[Habit.Bullet],
-        psd_list=[PSD.MDG],
-        skip_profiles=500,
-        max_workers=32,
-        save_results=False,
-        skip_existing=False,
-    )
+    ds_arts_list = []
+    for p in [PSD.D14, PSD.F07T, PSD.MDG]:
+        for h in [Habit.Bullet]:
+            print(f"Running ARTS simulation for PSD: {p}, Habit: {h}...")
+            ds_arts = main(
+                orbit_frame=orbit_frame,
+                habit_list=[h],
+                psd_list=[p],
+                skip_profiles=1500,
+                max_workers=32,
+                save_results=False,
+                skip_existing=False,
+            ).assign_coords({"psd": p, "habit": h})
+            ds_arts_list.append(ds_arts)
+
+    ds_arts = xr.concat(ds_arts_list, dim="new_dim").set_xindex(["psd", "habit"]).unstack("new_dim")    
+    ds_arts.encoding = {"source": "N/A"}
+
     print("ARTS simulation done.")
 else:
     ds_arts = (
@@ -42,27 +50,27 @@ else:
 
 # %%
 src_cpr = ds_arts.arts.attrs["CPR source"]
-prodmod_code = src_cpr[:8]
-product_code = src_cpr[9:19]
-frame_datetime = src_cpr.split("_")[5]
+product_baseline = src_cpr.split("_")[1][-2:]
+observation_datetime = src_cpr.split("_")[5]
 production_datetime = src_cpr.split("_")[6]
 
 ds_cfmr = ecio.load_CFMR(
     srcpath=data_paths.CFMR,
-    prodmod_code=prodmod_code,
-    product_code=product_code,
-    frame_datetime=frame_datetime,
+    product_baseline=product_baseline,
+    observation_datetime=observation_datetime,
     production_datetime=production_datetime,
-    frame_code=orbit_frame,
+    frame=orbit_frame[-1],
+    orbit=orbit_frame[:-1],
     nested_directory_structure=True,
 )
 ds_cfmr.close()
 print("C-FMR loading done.")
 
-if not run_arts:
+if run_arts:
     ds_xmet = ecio.load_XMET(
         srcpath=data_paths.XMET,
-        frame_code=orbit_frame,
+        frame=orbit_frame[-1],
+        orbit=orbit_frame[:-1],
         nested_directory_structure=True,
     )
     ds_xmet.close()
@@ -86,41 +94,30 @@ print("Merging ARTs result with input dataset (C-FMR) done.")
 # load MSI TIR2 data
 ds_msi = ecio.load_MRGR(
     srcpath=data_paths.MRGR,
-    prodmod_code="ECA_EXBA",
-    frame_code=orbit_frame,
+    product_baseline="BA",
+    frame=orbit_frame[-1],
+    orbit=orbit_frame[:-1],
     nested_directory_structure=True,
 )
 ds_msi.close()
 print("MSI loading done.")
 
 # pick the nearest MSI pixel for each CPR ray
-flatten_hcoords_msi = (
-    ds_msi.reset_coords(["longitude", "latitude"])[["longitude", "latitude"]]
-    .stack({"horizontal_grid": ["along_track", "across_track"]})
-    .to_array()
-)
-NearestIndex = NearestNDInterpolator(
-    flatten_hcoords_msi.data.T, np.arange(len(flatten_hcoords_msi["horizontal_grid"]))
-)
-nearest_indices_on_flatten_hcoords_msi = NearestIndex(
-    np.array([ds_arts["longitude"], ds_arts["latitude"]]).T
-).astype(int)
-ds_msi_TIR2_select = (
-    ds_msi["TIR2"]
-    .stack({"horizontal_grid": ["along_track", "across_track"]})
-    .isel({"horizontal_grid": nearest_indices_on_flatten_hcoords_msi})
+ds_msi_TIR2_select = ecio.get_MSI_from_footprint(
+    ds_msi["TIR2"],
+    ds_arts,
+    combine_datasets=False,
 )
 print("Selecting nearest MSI TIR2 pixel for each CPR ray done.")
 
 
-# %% plot comparison with CFMR reflectivity
-
+# %% plot comparison with CFMR reflectivity and MSI TIR2
 ds_compare = ds_arts.assign({"msi": ("along_track", ds_msi_TIR2_select.data)})
 ds_compare.encoding = ds_msi.encoding  # keep the original encoding info
 # ds_compare = ds_compare.reindex_like(ds_cfmr).assign_coords(ds_cfmr.coords)
 ds_compare["diff"] = ds_compare["arts"] - ds_compare["msi"]
 
-nrows = 2
+nrows = 4
 fig, axes = plt.subplots(
     figsize=(25, 7 * nrows), nrows=nrows, gridspec_kw={"hspace": 0.67}, sharex=True
 )
@@ -141,25 +138,28 @@ ecplot.add_temperature(axes[0], ds_cfmr)
 ecplot.add_marble(axes[0], ds_cfmr)
 
 # psd = PSD.MDG
-habit = Habit.Bullet
-ecplot.plot_EC_1D(
-    axes[1],
-    ds_compare,
-    {
-        f"{psd}": {
-            "xdata": ds_compare["time"],
-            "ydata": ds_compare["diff"].sel(habit=habit, psd=psd),
-            "marker": ".",
-            "markersize": 10,
-        } 
-        # for habit in ds_compare.habit.data
-        for psd in ds_compare.psd.data
-    },
-    title=f"Diff(ARTS - MSI) for habit: {habit}",
-    ylabel=r"$T_B$ [K]",
-    timevar="time",
-    legend_markerscale=2
-)
-axes[1].grid()
+# habit = Habit.Bullet
+
+for i, habit in enumerate(ds_compare.habit.data):
+    ecplot.plot_EC_1D(
+        axes[i + 1],
+        ds_compare,
+        {
+            f"{psd}": {
+                "xdata": ds_compare["time"],
+                "ydata": ds_compare["diff"].sel(habit=habit, psd=psd),
+                "marker": ".",
+                "markersize": 10,
+            }
+            # for habit in ds_compare.habit.data
+            for psd in ds_compare.psd.data
+        },
+        title=f"Diff(ARTS - MSI) for habit: {habit}",
+        ylabel=r"$T_B$ [K]",
+        timevar="time",
+        legend_markerscale=2,
+        use_localtime=False,
+    )
+    axes[i + 1].grid()
 # axes[1].legend().remove()
 # %%

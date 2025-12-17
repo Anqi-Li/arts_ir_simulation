@@ -226,7 +226,14 @@ def insert_bulkprop_from_earthcare(
                 ga = coef_mgd.get("ga", 1)
                 mu = coef_mgd.get("mu", 0)
                 ea.scat_speciesMgdMass(
-                    ws, species, la=-999, mu=mu, n0=n0, ga=ga, x_unit="dveq"
+                    ws,
+                    species,
+                    la=-999,
+                    mu=mu,
+                    n0=n0,
+                    ga=ga,
+                    x_unit="dmax",
+                    x_fit_start=100e-6,
                 )
 
             else:
@@ -508,7 +515,8 @@ def get_inputs(
 ):
     ds_xmet = ecio.load_XMET(
         srcpath=data_paths.XMET,
-        frame_code=orbit_frame,
+        frame=orbit_frame[-1],
+        orbit=orbit_frame[:-1],
         nested_directory_structure=True,
     )
     ds_xmet.close()
@@ -516,8 +524,9 @@ def get_inputs(
         XMET=ds_xmet,
         ds=ecio.load_CFMR(
             srcpath=data_paths.CFMR,
-            prodmod_code="ECA_EXBA",
-            frame_code=orbit_frame,
+            product_baseline="BA",
+            frame=orbit_frame[-1],
+            orbit=orbit_frame[:-1],
             nested_directory_structure=True,
         ),
         XMET_1D_variables=[],
@@ -615,7 +624,9 @@ def main(
 
             # Invertion to get frozen water content
             ds_cfmr_subset = get_frozen_water_content(
-                make_onion_invtable(habit=habit, psd=psd, coef_mdg=coef_mgd, return_xarray=True),
+                make_onion_invtable(
+                    habit=habit, psd=psd, coef_mdg=coef_mgd, return_xarray=True
+                ),
                 ds_cfmr_subset,
             )
             print("FWC inversion done.")
