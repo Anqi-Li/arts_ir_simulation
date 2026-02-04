@@ -66,7 +66,9 @@ pmodels = [
     ParticleModel(
         psd=ParticleSizeDistribution.ACM_CAP_FWC,
         habit_folder="/scratch/li/arts-yang-liquid-simlink",
-        habit_name="8-ColumnAggregate-ModeratelyRough",
+        # habit_name="8-ColumnAggregate-ModeratelyRough",
+        habit_name="Plate-ModeratelyRough",
+        # habit_name="SolidBulletRosette-ModeratelyRough",
         habit_size_step=4,
     ),
     # RWC
@@ -94,6 +96,7 @@ if False:
 
 # Basics
 ws = ea.wsInit(SpectralRegion.TIR)
+ws.SetNumberOfThreads(nthreads=8)
 ea.atmosphereDim(ws, dim=1)
 ea.planetEarth(ws)
 ea.ppath(ws)
@@ -140,7 +143,7 @@ ea.cloudbox(ws, CloudboxOption.FULL)
 # Loop over profiles
 pr0 = 2000 # First profile
 prn = 3000  # Last profile
-skip = 20
+skip = 200
 pr_fail = []
 n = len(range(pr0, prn, skip))
 print(f"Processing {n} profiles from {pr0} to {prn} with skip {skip}.")
@@ -154,15 +157,6 @@ for i, pr in enumerate(range(pr0, prn, skip)):
             ws.p_grid.value,
             dset,
             pr,
-            def_vars={
-                "LWC": "liquid_water_content",
-                "LWC_NTOT": "liquid_number_concentration",
-                "FWC_D0": "ice_median_volume_diameter",
-                "FWC_N0STAR": "ice_normalized_number_concentration",
-                "FWC": "ice_water_content",
-                "RWC_D0": "rain_median_volume_diameter",
-                "RWC_NW": "rain_normalized_number_concentration",
-            },
         )
 
         pm.to_pnd_field_1d(ws, pmodels, psd_input)
@@ -174,7 +168,34 @@ for i, pr in enumerate(range(pr0, prn, skip)):
 
 
 #% save for later comparison
-y_as_save_vx = y_as.copy()
+y_as_save_fwc1 = y_as.copy()
+
+#%%
+ref = dset["MSI_longwave_brightness_temperature"].isel(
+    along_track=slice(pr0, prn, skip), MSI_longwave_channel=1
+).data
+fig, ax = plt.subplots(1,1, figsize=(8,4))
+
+ax.plot(np.arange(pr0, prn, skip), y_as_save_fwc - ref, label=f"ARTS 1 (Plate)", marker='x', alpha=0.7)
+ax.plot(np.arange(pr0, prn, skip), y_as_save_fwc1 - ref, label=f"ARTS 1 (Plate)", marker='x', alpha=0.7)
+
+# ax.plot(np.arange(pr0, prn, skip), y_as_save_fwc2 - ref, label=f"ARTS 2 (Plate)", marker='x', alpha=0.7)
+# ax.plot(np.arange(pr0, prn, skip), y_as_save_fwc3 - ref, label=f"ARTS 3 (Plate)", marker='x', alpha=0.7)
+# ax.plot(np.arange(pr0, prn, skip), y_as_save_fwc4 - ref, label=f"ARTS 4 (Plate)", marker='x', alpha=0.7)
+
+dset = dset.eval(
+    "Tb_diff = MSI_longwave_brightness_temperature_forward.isel(MSI_longwave_channel=1) - MSI_longwave_brightness_temperature.isel(MSI_longwave_channel=1)",
+)
+dset["Tb_diff"].isel(along_track=slice(pr0, prn, skip)).plot(
+    ax=ax, label="ACMCAP forward", ls='--', c='grey',
+)
+ax.axhline(0, color='black', lw=0.5, ls='--')
+
+ax.legend()
+ax.set_xlabel("Along Track Index")
+ax.set_ylabel("Tb difference (K)")
+ax.set_title("ARTS - MSI brightness temperature differences")
+plt.show()
 
 # %%
 fig, ax = plt.subplots(4, 1, figsize=(8, 6), sharex=True, constrained_layout=True)
@@ -188,9 +209,10 @@ dset["rain_water_content"].isel(
     y="JSG_height",
     cmap="viridis",
     cbar_kwargs={"label": "log10 [kg/m3]"},
+    add_colorbar=True,
 )
 ax[0].invert_yaxis()
-ax[0].set_title('Rain Water Content log10')
+ax[0].set_title('Rain Water Content')
 ax[0].set_xlabel('')
 
 # Liquid water content
@@ -202,9 +224,11 @@ dset["liquid_water_content"].isel(
     y="JSG_height",
     cmap="viridis",
     cbar_kwargs={"label": "log10 [kg/m3]"},
+    add_colorbar=True,
+
 )
 ax[1].invert_yaxis()
-ax[1].set_title('Liquid Water Content log10')
+ax[1].set_title('Liquid Water Content')
 ax[1].set_xlabel('')
 
 # Ice water content
@@ -218,11 +242,10 @@ dset["ice_water_content"].isel(
     cbar_kwargs={"label": "log10 [kg/m3]"},
 )
 ax[2].invert_yaxis()
-ax[2].set_title('Ice Water Content log10')
+ax[2].set_title('Ice Water Content')
 ax[2].set_xlabel('')
 
 # Brightness temperatures
-ax[3].plot(np.arange(pr0, prn, skip), y_as_save_vx, label="ARTS", marker='^', alpha=0.7)
 dset["MSI_longwave_brightness_temperature"].isel(
     along_track=slice(pr0, prn, skip), MSI_longwave_channel=1
 ).plot(
@@ -237,10 +260,13 @@ dset["MSI_longwave_brightness_temperature_forward"].isel(
     label="ACMCAP forward",
     alpha=0.5,
 )
+ax[3].plot(np.arange(pr0, prn, skip), y_as, label=f"ARTS ({pmodels[1].habit_name})", marker='', alpha=0.7)
+
 ax[3].legend()
 ax[3].set_xlabel("Along Track Index")
 ax[3].set_ylabel("Tb (K)")
 
+fig.suptitle(f"ACM_CAP Profiles {orbit_frame}:BA")
 plt.show()
 
 # %%
