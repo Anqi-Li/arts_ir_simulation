@@ -13,6 +13,7 @@ import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import pyarts
+from tqdm import tqdm
 import xarray as xr
 
 from ectools import ecio
@@ -35,25 +36,6 @@ import data_paths as dp
 import sensor.aws
 import sensor.hmatrix as hmatrix
 
-# %%
-# def get_aws_f_grid(channels):
-#     """
-#     Get sorted frequency grid and channel names for given AWS channels.
-#     """
-
-    # channels_dict = sensor.aws.all_channels(channels)
-#     freq = []
-#     channel_names = []
-#     for k, v in channels_dict.items():
-#         freq.append(np.array(v.f_centre) + np.array(v.f_offset))
-#         channel_names.append(k)
-#         if len(v.f_offset) == 2:
-#             channel_names.append(k)
-#     freq = np.concatenate(freq)
-#     sort_indices = np.argsort(freq)
-#     return freq[sort_indices], np.array(channel_names)[sort_indices]
-
-
 # ============================================================================
 # DATA LOADING FUNCTIONS
 # ============================================================================
@@ -74,6 +56,7 @@ def load_data(orbit, frame):
 
     ds_xmet = ecio.load_XMET(
         srcpath=dp.XMET,
+        product_baseline="AA",
         orbit=orbit,
         frame=frame,
     )
@@ -187,11 +170,7 @@ def get_default_pmodels_aws(
     ]
 
 
-def setup_ir(ws, dset, pmodels_ir, pr0, prn, skip):
-    """Setup IR simulation and process profiles."""
-    print("Setting up IR simulation...")
-    print(f"Using particle model for FWC: {pmodels_ir[1].habit_name}")
-
+def setup_workspace_ir_abs(ws):
     # Absorption lookup table
     ws.abs_nls_interp_order = 3
     ws.abs_t_interp_order = 3
@@ -219,75 +198,23 @@ def setup_ir(ws, dset, pmodels_ir, pr0, prn, skip):
     ws.propmat_clearsky_agendaAuto(use_abs_lookup=1)
     ws.abs_lookupAdapt()
 
-    # Fixed parts of cloudbox
-    pm.to_scat_data(ws, pmodels_ir)
-    ea.cloudbox(ws, CloudboxOption.FULL)
 
-    n = len(range(pr0, prn, skip))
-    print(f"Processing {n} IR profiles from {pr0} to {prn} with skip {skip}.")
-
-    y_allsky_ir = np.full((n, len(ws.f_grid.value)), np.nan)
-    for i, pr in enumerate(range(pr0, prn, skip)):
-        ok = dl.ec_xmetAtmosphere1D(ws, dset, pr, FascodVersion.MLS)
-        if ok:
-            print(f"  IR Profile {i}/{n}...")
-            psd_input = dl.ec_acm_capHydrometeors1D(
-                ws.p_grid.value,
-                dset,
-                pr,
-            )
-            pm.to_pnd_field_1d(ws, pmodels_ir, psd_input)
-            ea.checks(ws)
-            ea.disort(ws, Npfct=-1)
-            ws.yCalc()
-            y_allsky_ir[i, :] = ws.y.value
-
-    print("IR all-sky TBs computed successfully.")
-
-    result_ir = xr.DataArray(
-        data=np.atleast_2d(y_allsky_ir),
-        dims=["along_track", "frequency_ir"],
-        coords={
-            "along_track": np.arange(pr0, prn, skip),
-            "frequency_ir": ws.f_grid.value,
-        },
-        name="ARTS_MSI_brightness_temperature",
-        attrs={
-            "units": "K",
-            "long_name": "ARTS simulated MSI brightness temperature",
-            "description": "ARTS simulated MSI brightness temperature using ACMCAP hydrometeors",
-            "particle_model": [
-                {"psd": p, "habit": h}
-                for p, h in zip(
-                    [pm.psd.value for pm in pmodels_ir],
-                    [pm.habit_name for pm in pmodels_ir],
-                )
-            ],
-        },
-    )
-
-    return result_ir
-
-
-def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
-    """Setup AWS simulation and process profiles."""
-    print("Setting up AWS simulation...")
-    print(f"Using particle model for FWC: {pmodels_mw[1].habit_name}")
-
+def setup_workspace_aws(ws):
     # Absorption
     ea.abs_speciesPredefined(
         ws, add_lwc=False, option=AbsSpeciesPredefinedOption.RTTOV_v13x
     )
-    
+
     # Sensor
     from handy import AWSChannel
+
     # check channels are stricktly sorted and have no duplicates
     channels = [AWSChannel.AWS35, AWSChannel.AWS36, AWSChannel.AWS41, AWSChannel.AWS42]
     ws.iy_unit = IyUnit.PLANCK_BT.value
-    # check that channels are strictly sorted 
+    # check that channels are strictly sorted
     nch = len(channels)
-    for i in range(nch-1):
-        if channels[i+1].value <= channels[i].value:
+    for i in range(nch - 1):
+        if channels[i + 1].value <= channels[i].value:
             raise ValueError("fsetting.channels must be sorted and have no duplicates.")
     # create sensor reponse matrix
     aws_specs = sensor.aws.sensor_specs(
@@ -306,13 +233,13 @@ def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
     ws.f_backend = f_backend
     # get channel2fgrid_indexes/weights
     hvecs = hmatrix.frequency_weights(aws_specs, f_grid)
-    channel2fgrid_indexes = [None] * nch 
+    channel2fgrid_indexes = [None] * nch
     channel2fgrid_weights = [None] * nch
     for i in range(nch):
         if len(hvecs[i]) == 1:
             hthis = hvecs[i][0]
         else:
-            hthis = hvecs[i][0]+hvecs[i][1]
+            hthis = hvecs[i][0] + hvecs[i][1]
         ind = np.nonzero(hthis)[0]
         channel2fgrid_indexes[i] = ind
         channel2fgrid_weights[i] = hthis[ind]
@@ -326,6 +253,68 @@ def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
 
     wsv.sensor_poslos(ws, z=[600e3], za=[170])
 
+
+def setup_ir(ws, dset, pmodels_ir, pr0, prn, skip):
+    """Setup IR simulation and process profiles."""
+    print("Setting up IR simulation...")
+    print(f"Using particle model for FWC: {pmodels_ir[1].habit_name}")
+
+    # Fixed parts of cloudbox
+    pm.to_scat_data(ws, pmodels_ir)
+    ea.cloudbox(ws, CloudboxOption.FULL)
+
+    n = len(range(pr0, prn, skip))
+    print(f"Processing {n} IR profiles from {pr0} to {prn} with skip {skip}.")
+
+    y_allsky_ir = np.full((n, len(ws.f_grid.value)), np.nan)
+    for i, pr in tqdm(
+        enumerate(range(pr0, prn, skip)), total=n, desc="Processing IR Profiles"
+    ):
+        ok = dl.ec_xmetAtmosphere1D(ws, dset, pr, FascodVersion.MLS)
+        if ok:
+            # Additional processing can be done here if needed
+            psd_input = dl.ec_acm_capHydrometeors1D(
+                ws.p_grid.value,
+                dset,
+                pr,
+            )
+            pm.to_pnd_field_1d(ws, pmodels_ir, psd_input)
+            ea.checks(ws)
+            ea.disort(ws, Npfct=-1)
+            ws.yCalc()
+            y_allsky_ir[i, :] = ws.y.value
+
+    print("IR all-sky TBs computed successfully.")
+
+    result_ir = xr.DataArray(
+        data=np.atleast_2d(y_allsky_ir),
+        dims=["along_track", "frequency_ir"],
+        coords={
+            "along_track": np.arange(pr0, prn, skip),
+            "frequency_ir": ws.f_grid.value.value.copy(),
+        },
+        name="ARTS_MSI_brightness_temperature",
+        attrs={
+            "units": "K",
+            "long_name": "ARTS simulated MSI brightness temperature",
+            "description": "ARTS simulated MSI brightness temperature using ACMCAP hydrometeors",
+        },
+    )
+
+    result_ir = result_ir.expand_dims(("psd", "habit_ir")).assign_coords(
+        {
+            "psd": [pmodels_ir[1].psd.value],
+            "habit_ir": [pmodels_ir[1].habit_name],
+        }
+    )
+    return result_ir
+
+
+def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
+    """Setup AWS simulation and process profiles."""
+    print("Setting up AWS simulation...")
+    print(f"Using particle model for FWC: {pmodels_mw[1].habit_name}")
+
     # Fixed parts of cloudbox
     pm.to_scat_data(ws, pmodels_mw)
     ea.cloudbox(ws, CloudboxOption.FULL)
@@ -334,10 +323,11 @@ def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
     print(f"Processing {n} AWS profiles from {pr0} to {prn} with skip {skip}.")
 
     y_allsky_mw = np.full((n, len(ws.f_backend.value)), np.nan)
-    for i, pr in enumerate(range(pr0, prn, skip)):
+    for i, pr in tqdm(
+        enumerate(range(pr0, prn, skip)), total=n, desc="Processing AWS Profiles"
+    ):
         ok = dl.ec_xmetAtmosphere1D(ws, dset, pr, FascodVersion.MLS)
         if ok and dset["land_flag"].isel(along_track=pr).values == 0:
-            print(f"  AWS Profile {i}/{n}...")
             psd_input = dl.ec_acm_capHydrometeors1D(
                 ws.p_grid.value,
                 dset,
@@ -351,30 +341,26 @@ def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
 
     print("AWS all-sky TBs computed successfully.")
 
-    # _, channel_names = get_aws_f_grid(channels)
     result_aws = xr.DataArray(
         data=np.atleast_2d(y_allsky_mw),
         dims=["along_track", "frequency_aws"],
         coords={
             "along_track": np.arange(pr0, prn, skip),
-            "frequency_aws": ws.f_backend.value,
-            "aws_channel_name": ("frequency_aws", [ch.name for ch in channels]),
+            "frequency_aws": ws.f_backend.value.value.copy(),
         },
         name="ARTS_AWS_brightness_temperature",
         attrs={
             "units": "K",
             "long_name": "ARTS simulated AWS brightness temperature",
             "description": "ARTS simulated AWS brightness temperature using ACMCAP hydrometeors",
-            "particle_model": [
-                {"psd": p, "habit": h}
-                for p, h in zip(
-                    [pm.psd.value for pm in pmodels_mw],
-                    [pm.habit_name for pm in pmodels_mw],
-                )
-            ],
         },
     )
-
+    result_aws = result_aws.expand_dims(("psd", "habit_mw")).assign_coords(
+        {
+            "psd": [pmodels_mw[1].psd.value],
+            "habit_mw": [pmodels_mw[1].habit_name],
+        }
+    )
     return result_aws
 
 
@@ -408,6 +394,10 @@ def merge_results(
             "time": (
                 "along_track",
                 dset["time"].isel(along_track=slice(pr0, prn, skip)).values,
+            ),
+            "land_flag": (
+                "along_track",
+                dset["land_flag"].isel(along_track=slice(pr0, prn, skip)).values,
             ),
         }
     )
@@ -485,21 +475,23 @@ def plot_results(dset, result, pr0, prn, skip):
     ax[3].legend(handles, new_labels, loc="upper right")
     plt.show()
 
-#%%
+
+# %%
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
+
 def main(
     orbit="06203",
     frame="D",
-    pr0=2000,
-    prn=3000,
-    skip=100,
+    pr0=None,
+    prn=None,
+    skip=None,
     plot=False,
     output=None,
-    pmodels_ir=None,
-    pmodels_aws=None,
+    ice_habit_ir=["8-ColumnAggregate-ModeratelyRough"],
+    ice_habit_aws=["LargePlateAggregate"],
 ):
     """Main execution function.
 
@@ -510,19 +502,19 @@ def main(
     frame : str
         Frame identifier (default: D)
     pr0 : int
-        First profile index (default: 2000)
+        First profile index (default: 0)
     prn : int
-        Last profile index (default: 3000)
+        Last profile index (default: max available in dataset along_track dimension)
     skip : int
-        Skip profiles (default: 100)
+        Skip profiles (default: 1)
     plot : bool
         Show plots (default: False)
     output : str
         Output NetCDF file path (optional)
-    pmodels_ir : list of ParticleModel
-        IR particle models. If None, uses defaults.
-    pmodels_aws : list of ParticleModel
-        AWS particle models. If None, uses defaults.
+    ice_habit_ir : list of str
+        Ice habit(s) for IR simulation (default: ["8-ColumnAggregate-ModeratelyRough"])
+    ice_habit_aws : list of str
+        Ice habit(s) for AWS simulation (default: ["LargePlateAggregate"])
     """
     print("=" * 70)
     print(f"ARTS Simulation: orbit={orbit}, frame={frame}")
@@ -533,21 +525,41 @@ def main(
 
     # %% Load data
     dset, ds_xmet, dset_fmr = load_data(orbit, frame)
+    if pr0 is None:
+        pr0 = 0
+    if prn is None:
+        prn = dset.sizes["along_track"]
+    if skip is None:
+        skip = 1
 
     # %% Initialize workspace
     ws = init_workspace()
 
-    # %% Default particle models if not supplied
-    if pmodels_ir is None:
-        pmodels_ir = get_default_pmodels_ir()
-    if pmodels_aws is None:
-        pmodels_aws = get_default_pmodels_aws()
-
     # %% Setup and run IR simulation
-    result_ir = setup_ir(ws, dset, pmodels_ir, pr0, prn, skip)
+    setup_workspace_ir_abs(ws)
+
+    if isinstance(ice_habit_ir, str):
+        ice_habit_ir = [ice_habit_ir]
+    result_ir = []
+    for habit in ice_habit_ir:
+        print(f"IR ice habit: {habit}")
+        pmodels_ir = get_default_pmodels_ir(ice_habit=habit)
+        result_ir_habit = setup_ir(ws, dset, pmodels_ir, pr0, prn, skip)
+        result_ir.append(result_ir_habit)
+    result_ir = xr.concat(result_ir, dim="habit_ir")
 
     # %% Setup and run AWS simulation
-    result_aws = setup_aws(ws, dset, pmodels_aws, pr0, prn, skip)
+    setup_workspace_aws(ws)
+
+    if isinstance(ice_habit_aws, str):
+        ice_habit_aws = [ice_habit_aws]
+    result_aws = []
+    for habit in ice_habit_aws:
+        print(f"AWS ice habit: {habit}")
+        pmodels_aws = get_default_pmodels_aws(ice_habit=habit)
+        result_aws_habit = setup_aws(ws, dset, pmodels_aws, pr0, prn, skip)
+        result_aws.append(result_aws_habit)
+    result_aws = xr.concat(result_aws, dim="habit_mw")
 
     # %% Merge results
     result = merge_results(
@@ -556,11 +568,11 @@ def main(
 
     # %% Save if output file specified
     if output:
-        print(f"Saving results to {output}...")
+        print(f"Saving results...")
         result.to_netcdf(output)
         print(f"Results saved to {output}")
 
-    # Plot if requested
+    # %% Plot if requested
     if plot:
         plot_results(dset, result, pr0, prn, skip)
 
@@ -596,13 +608,16 @@ Examples:
         "--frame", type=str, default="D", help="Frame identifier (default: D)"
     )
     parser.add_argument(
-        "--pr0", type=int, default=2000, help="First profile index (default: 2000)"
+        "--pr0", type=int, default=None, help="First profile index (default: 0)"
     )
     parser.add_argument(
-        "--prn", type=int, default=3000, help="Last profile index (default: 3000)"
+        "--prn",
+        type=int,
+        default=None,
+        help="Last profile index (default: max available in dataset along_track dimension)",
     )
     parser.add_argument(
-        "--skip", type=int, default=100, help="Skip profiles (default: 100)"
+        "--skip", type=int, default=1, help="Skip profiles (default: 1)"
     )
     parser.add_argument(
         "--plot", action="store_true", help="Show plots (default: no plots)"
@@ -616,8 +631,8 @@ Examples:
     parser.add_argument(
         "--ice-habit-ir",
         type=str,
-        default="8-ColumnAggregate-ModeratelyRough",
-        help="Ice habit for IR simulation (default: 8-ColumnAggregate-ModeratelyRough)",
+        default="Plate-ModeratelyRough",
+        help="Ice habit for IR simulation (default: Plate-ModeratelyRough)",
     )
     parser.add_argument(
         "--ice-habit-aws",
@@ -628,9 +643,6 @@ Examples:
 
     args = parser.parse_args()
 
-    pmodels_ir = get_default_pmodels_ir(ice_habit=args.ice_habit_ir)
-    pmodels_aws = get_default_pmodels_aws(ice_habit=args.ice_habit_aws)
-
     result, dset = main(
         orbit=args.orbit,
         frame=args.frame,
@@ -639,6 +651,6 @@ Examples:
         skip=args.skip,
         plot=args.plot,
         output=args.output,
-        pmodels_ir=pmodels_ir,
-        pmodels_aws=pmodels_aws,
+        ice_habit_ir=args.ice_habit_ir.split(","),
+        ice_habit_aws=args.ice_habit_aws.split(","),
     )
