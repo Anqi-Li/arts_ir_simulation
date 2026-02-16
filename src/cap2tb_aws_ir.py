@@ -177,7 +177,7 @@ def setup_workspace_ir_abs(ws):
     ws.abs_p_interp_order = 3
     path_abs_lookup_table = os.path.join(
         os.path.dirname(os.path.dirname(__file__)),
-        "data/lookup_tables/abs_table_Earthcare_TIR2_dense_f_grid_2025-06-19_16:54:15.662842.xml",
+        "data/lookup_tables/abs_table_Earthcare_TIR2_one_wavelength_2026-02-11_15:22:46.062825.xml",
     )
     ws.ReadXML(
         ws.abs_lookup,
@@ -189,7 +189,7 @@ def setup_workspace_ir_abs(ws):
     wsv.sensor_poslos(ws, z=[400e3], za=[180])
     ea.sensorNone(
         ws,
-        f_grid=ws.abs_lookup.value.f_grid.value[51],
+        f_grid=ws.abs_lookup.value.f_grid.value,
         iy_unit=IyUnit.PLANCK_BT,
     )
 
@@ -209,7 +209,7 @@ def setup_workspace_aws(ws):
     from handy import AWSChannel
 
     # check channels are stricktly sorted and have no duplicates
-    channels = [AWSChannel.AWS35, AWSChannel.AWS36, AWSChannel.AWS41, AWSChannel.AWS42]
+    channels = [AWSChannel.AWS33, AWSChannel.AWS36, AWSChannel.AWS41, AWSChannel.AWS44]
     ws.iy_unit = IyUnit.PLANCK_BT.value
     # check that channels are strictly sorted
     nch = len(channels)
@@ -361,6 +361,7 @@ def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
             "habit_mw": [pmodels_mw[1].habit_name],
         }
     )
+    
     return result_aws
 
 
@@ -523,7 +524,7 @@ def main(
 
     print("=" * 70)
 
-    # %% Load data
+    # % Load data
     dset, ds_xmet, dset_fmr = load_data(orbit, frame)
     if pr0 is None:
         pr0 = 0
@@ -532,10 +533,10 @@ def main(
     if skip is None:
         skip = 1
 
-    # %% Initialize workspace
+    # % Initialize workspace
     ws = init_workspace()
 
-    # %% Setup and run IR simulation
+    # % Setup and run IR simulation
     setup_workspace_ir_abs(ws)
 
     if isinstance(ice_habit_ir, str):
@@ -548,7 +549,7 @@ def main(
         result_ir.append(result_ir_habit)
     result_ir = xr.concat(result_ir, dim="habit_ir")
 
-    # %% Setup and run AWS simulation
+    # % Setup and run AWS simulation
     setup_workspace_aws(ws)
 
     if isinstance(ice_habit_aws, str):
@@ -561,18 +562,18 @@ def main(
         result_aws.append(result_aws_habit)
     result_aws = xr.concat(result_aws, dim="habit_mw")
 
-    # %% Merge results
+    # % Merge results
     result = merge_results(
         result_ir, result_aws, dset, ds_xmet, dset_fmr, orbit, frame, pr0, prn, skip
     )
 
-    # %% Save if output file specified
+    # % Save if output file specified
     if output:
         print(f"Saving results...")
         result.to_netcdf(output)
         print(f"Results saved to {output}")
 
-    # %% Plot if requested
+    # %Plot if requested
     if plot:
         plot_results(dset, result, pr0, prn, skip)
 
