@@ -271,7 +271,7 @@ def setup_ir(ws, dset, pmodels_ir, pr0, prn, skip):
         enumerate(range(pr0, prn, skip)), total=n, desc="Processing IR Profiles"
     ):
         ok = dl.ec_xmetAtmosphere1D(ws, dset, pr, FascodVersion.MLS)
-        if ok:
+        if ok and dset["land_flag"].isel(along_track=pr).values == 0:
             # Additional processing can be done here if needed
             psd_input = dl.ec_acm_capHydrometeors1D(
                 ws.p_grid.value,

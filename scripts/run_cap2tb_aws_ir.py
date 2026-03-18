@@ -40,15 +40,15 @@ ice_habit_ir = [
     "Droxtal-ModeratelyRough",
 ]
 ice_habit_aws = [
-    "LargePlateAggregate",
-    "LargeColumnAggregate",
-    "6-BulletRosette",
     "8-ColumnAggregate",
+    "LargePlateAggregate",
+    "6-BulletRosette",
+    "LargeColumnAggregate",
 ]
 
 log_file_path = f"/home/anqil/arts_ir_simulation/data/log/cap2tb_aws_ir_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 failed_file_path = (
-    "/home/anqil/arts_ir_simulation/data/log/cap2tb_aws_ir_failed_orbit_frames.txt"
+    "/home/anqil/arts_ir_simulation/data/log/cap2tb_aws_ir_failed_orbit_frames2.txt"
 )
 
 # Load previously failed orbit_frames to skip
@@ -65,7 +65,7 @@ def build_cmd(orbit_frame):
     """Build command for a given orbit_frame."""
     orbit = orbit_frame[:-1]
     frame = orbit_frame[-1]
-    output = f"/home/anqil/arts_ir_simulation/data/temp_files/cap2tb_aws_ir_{orbit}_{frame}_skip_{skip_profile}.nc"
+    output = f"/home/anqil/arts_ir_simulation/data/temp_files/new_dmean/cap2tb_aws_ir_{orbit}_{frame}_skip_{skip_profile}.nc"
 
     cmd = [
         "python3",
