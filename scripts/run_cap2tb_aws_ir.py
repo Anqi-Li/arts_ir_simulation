@@ -1,8 +1,9 @@
 # %%
 import os
 import subprocess
-from ectools import ecio
-import data_paths as dp
+import earthcarekit as eck
+# from ectools import ecio
+# import data_paths as dp
 from datetime import datetime
 import argparse
 import tempfile
@@ -19,14 +20,24 @@ parser.add_argument(
 args = parser.parse_args()
 
 # %%
-filelist = ecio.get_filelist(
-    basedir=dp.ACMCAP,
-    product_baseline="BA",
-    nested_directory_structure=True,
-    start_range_str="20250701T000000Z",
-    end_range_str="20250731T235959Z",
+# filelist = ecio.get_filelist(
+#     basedir=dp.ACMCAP,
+#     product_baseline="BC",
+#     nested_directory_structure=True,
+#     start_range_str="20251201T000000Z",
+#     end_range_str="20260101T000000Z",
+# )
+# list_orbit_frame = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist]
+
+df_search_result = eck.search_product(
+    file_type=['ACMCAP', 'XMET', 'CFMR'],
+    start_time="2025-12-01T00:00:00Z",
+    end_time="2026-01-01T00:00:00Z",
 )
-list_orbit_frame = [f.split("/")[-1].split("_")[-1].split(".")[0] for f in filelist]
+
+grouped = df_search_result.groupby(['orbit_and_frame'])['file_type'].apply(set).reset_index()
+filtered = grouped[grouped['file_type'].apply(lambda x: len(x) == 3)]
+list_orbit_frame = filtered['orbit_and_frame'].tolist()
 
 # %%
 # Configuration
@@ -48,7 +59,7 @@ ice_habit_aws = [
 
 log_file_path = f"/home/anqil/arts_ir_simulation/data/log/cap2tb_aws_ir_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 failed_file_path = (
-    "/home/anqil/arts_ir_simulation/data/log/cap2tb_aws_ir_failed_orbit_frames2.txt"
+    "/home/anqil/arts_ir_simulation/data/log/cap2tb_aws_ir_failed_orbit_frames_202512.txt"
 )
 
 # Load previously failed orbit_frames to skip
@@ -65,7 +76,7 @@ def build_cmd(orbit_frame):
     """Build command for a given orbit_frame."""
     orbit = orbit_frame[:-1]
     frame = orbit_frame[-1]
-    output = f"/home/anqil/arts_ir_simulation/data/temp_files/new_dmean/cap2tb_aws_ir_{orbit}_{frame}_skip_{skip_profile}.nc"
+    output = f"/home/anqil/arts_ir_simulation/data/temp_files/december/cap2tb_aws_ir_{orbit}_{frame}_skip_{skip_profile}.nc"
 
     cmd = [
         "python3",

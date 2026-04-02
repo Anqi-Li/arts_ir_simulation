@@ -11,12 +11,8 @@ Can be used interactively or as a CLI script:
 import os
 import argparse
 import numpy as np
-import matplotlib.pyplot as plt
-import pyarts
 from tqdm import tqdm
 import xarray as xr
-
-from ectools import ecio
 
 import easy_arts.easy_arts as ea
 import easy_arts.dataload as dl
@@ -40,52 +36,138 @@ import sensor.hmatrix as hmatrix
 # DATA LOADING FUNCTIONS
 # ============================================================================
 
+def search_and_load_data(orbit=None, frame=None, orbit_and_frame=None, file_types=["ACMCAP", "XMET", "CFMR"]):
+    import earthcarekit as eck
+
+    """Search for and load a specific dataset type for given orbit/frame."""
+
+    if orbit is None or frame is None:
+        if orbit_and_frame is None:
+            raise ValueError("Either orbit/frame or orbit_and_frame must be provided.")
+        else:
+            orbit = orbit_and_frame[:-1]
+            frame = orbit_and_frame[-1]
+
+    print(f"Searching for {file_types} data for orbit {orbit}, frame {frame}...")
+    df = eck.search_product(
+        file_type=file_types,
+        orbit_number=orbit,
+        frame_id=frame,
+        orbit_and_frame=orbit_and_frame,
+        mode='fast',
+    )
+    if df.empty:
+        raise FileNotFoundError(f"No {file_types} data found for orbit {orbit}, frame {frame}.")
+    
+    df_search = df[df['file_type']=='ACM_CAP_2B']
+    if len(df_search) == 1:
+        file_path_acmcap = df_search.iloc[0]['filepath']
+    else:
+        raise FileNotFoundError(f"Expected exactly one ACMCAP file for orbit {orbit}, frame {frame}, but found {len(df_search)}.")
+    
+    df_search = df[df['file_type']=='CPR_FMR_2A']
+    if len(df_search) == 1:
+        file_path_fmr = df_search.iloc[0]['filepath']
+    else:
+        raise FileNotFoundError(f"Expected exactly one CFMR file for orbit {orbit}, frame {frame}, but found {len(df_search)}.")
+    
+    df_search = df[df['file_type']=='AUX_MET_1D']
+    if len(df_search) == 1:
+        file_path_xmet = df_search.iloc[0]['filepath']
+    else:
+        raise FileNotFoundError(f"Expected exactly one XMET file for orbit {orbit}, frame {frame}, but found {len(df_search)}.")
+    
+    with (
+        eck.read_product(file_path_acmcap, ensure_nans=False) as dataset_acmcap,
+        eck.read_product(file_path_fmr, ensure_nans=False) as dataset_fmr,
+        eck.read_product(file_path_xmet, ensure_nans=False) as dataset_xmet,
+    ):
+        # Rebin X-MET to along_track/vertical grid
+        dataset_xmet = eck.rebin_xmet_to_vertical_track(
+            ds_xmet=dataset_xmet[[
+                "latitude",
+                "longitude",
+                "geometrical_height",
+                "ozone_mass_mixing_ratio",
+                ]],
+            ds_vert=dataset_acmcap,
+        )
+    dataset = dataset_acmcap.assign(dataset_fmr[["land_flag"]])
+    dataset = dataset.assign(dataset_xmet[["ozone_mass_mixing_ratio"]])
+    dataset = dataset.assign_attrs({
+        "ACMCAP_source": dataset_acmcap.encoding["source"].split("/")[-1],
+        "CFMR_source": dataset_fmr.encoding["source"].split("/")[-1],
+        "XMET_source": dataset_xmet.encoding["source"].split("/")[-1],
+    })
+    return dataset
 
 def load_data(orbit, frame):
+    "Deprecated: Use search_and_load_data instead. Load ACMCAP, XMET, and CFMR datasets for given orbit/frame."
+    from ectools import ecio
+
     """Load ACMCAP, XMET, and CFMR datasets for given orbit/frame."""
     print(f"Loading data for orbit {orbit}, frame {frame}...")
 
     dset = ecio.load_ACMCAP(
         srcpath=dp.ACMCAP,
-        product_baseline="BA",
+        # product_baseline="BC",
         orbit=orbit,
         frame=frame,
         nested_directory_structure=True,
     )
-    dset.close()
+    if dset is None:
+        raise FileNotFoundError(f"No ACMCAP data found for orbit {orbit}, frame {frame}.")
+    else:
+        dset.close()
 
     ds_xmet = ecio.load_XMET(
         srcpath=dp.XMET,
-        product_baseline="AA",
+        # product_baseline="AA",
         orbit=orbit,
         frame=frame,
     )
-    ds_xmet.close()
+    if ds_xmet is None:
+        raise FileNotFoundError(f"No XMET data found for orbit {orbit}, frame {frame}.")
+    else:
+        ds_xmet.close()
 
     dset = ecio.get_XMET(
         ds_xmet,
         dset,
         XMET_1D_variables=[],
         XMET_2D_variables=[
-            "temperature",
-            "pressure",
-            "specific_humidity",
+            # "temperature",
+            # "pressure",
+            # "specific_humidity",
             "ozone_mass_mixing_ratio",
         ],
     )
-
+    dset["ozone_mass_mixing_ratio"] = dset["ozone_mass_mixing_ratio"].where(dset["ozone_mass_mixing_ratio"].notnull(), other=0)
+    
     dset_fmr = ecio.load_CFMR(
         srcpath=dp.CFMR,
-        product_baseline="BA",
+        # product_baseline="BA",
         orbit=orbit,
         frame=frame,
         nested_directory_structure=True,
     )
-    dset_fmr.close()
-    dset = dset.update(dset_fmr[["land_flag"]])
-
-    return dset, ds_xmet, dset_fmr
-
+    if dset_fmr is None:
+        raise FileNotFoundError(f"No CFMR data found for orbit {orbit}, frame {frame}.")
+    else:
+        dset_fmr.close()
+    
+    dset = dset.assign(dset_fmr[["land_flag"]])
+    
+    if dset is None:
+        raise FileNotFoundError(f"failed update {orbit}, frame {frame}.")
+    
+    # return dset, ds_xmet, dset_fmr
+    dset = dset.assign_attrs({
+        "ACMCAP_source": dset.encoding["source"].split("/")[-1],
+        # "XMET_source": ds_xmet.encoding["source"].split("/")[-1],
+        "CFMR_source": dset_fmr.encoding["source"].split("/")[-1],
+    })
+    return dset
 
 def init_workspace():
     """Initialize ARTS workspace with basic settings."""
@@ -254,7 +336,7 @@ def setup_workspace_aws(ws):
     wsv.sensor_poslos(ws, z=[600e3], za=[170])
 
 
-def setup_ir(ws, dset, pmodels_ir, pr0, prn, skip):
+def simulate_ir(ws, dset, pmodels_ir, pr0, prn, skip):
     """Setup IR simulation and process profiles."""
     print("Setting up IR simulation...")
     print(f"Using particle model for FWC: {pmodels_ir[1].habit_name}")
@@ -310,7 +392,7 @@ def setup_ir(ws, dset, pmodels_ir, pr0, prn, skip):
     return result_ir
 
 
-def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
+def simulate_aws(ws, dset, pmodels_mw, pr0, prn, skip):
     """Setup AWS simulation and process profiles."""
     print("Setting up AWS simulation...")
     print(f"Using particle model for FWC: {pmodels_mw[1].habit_name}")
@@ -366,7 +448,7 @@ def setup_aws(ws, dset, pmodels_mw, pr0, prn, skip):
 
 
 def merge_results(
-    result_ir, result_aws, dset, ds_xmet, dset_fmr, orbit, frame, pr0, prn, skip
+    result_ir, result_aws, dset, orbit, frame, pr0, prn, skip
 ):
     """Merge IR and AWS results into a single dataset."""
     print("Merging IR and AWS results...")
@@ -377,104 +459,31 @@ def merge_results(
             "description": "ARTS simulated brightness temperatures using ACMCAP hydrometeors",
             "orbit": orbit,
             "frame": frame,
-            "ACMCAP_source": dset.encoding["source"].split("/")[-1],
-            "XMET_source": ds_xmet.encoding["source"].split("/")[-1],
-            "CFMR_source": dset_fmr.encoding["source"].split("/")[-1],
-        }
+        } | {k:v for k,v in dset.attrs.items() if k.endswith('source')} 
     )
-    result = result.assign(
-        {
-            "latitude": (
-                "along_track",
-                dset["latitude"].isel(along_track=slice(pr0, prn, skip)).values,
-            ),
-            "longitude": (
-                "along_track",
-                dset["longitude"].isel(along_track=slice(pr0, prn, skip)).values,
-            ),
-            "time": (
-                "along_track",
-                dset["time"].isel(along_track=slice(pr0, prn, skip)).values,
-            ),
-            "land_flag": (
-                "along_track",
-                dset["land_flag"].isel(along_track=slice(pr0, prn, skip)).values,
-            ),
-        }
-    )
+
+    vars_1d = ["latitude", "longitude", "time", "land_flag", "ice_water_path"]
+    vars_2d = [ "height", "ice_water_content", "ice_riming_factor"]
+
+    for var in vars_1d:
+        result[var] = xr.DataArray(
+            data=dset[var].isel(along_track=slice(pr0, prn, skip)).values,
+            dims=["along_track"],
+            coords={"along_track": np.arange(pr0, prn, skip)},
+            attrs=dset[var].attrs,
+        )
+    for var in vars_2d:
+        result[var] = xr.DataArray(
+            data=dset[var].isel(along_track=slice(pr0, prn, skip)).values,
+            dims=["along_track", "vertical"],
+            coords={
+                "along_track": np.arange(pr0, prn, skip),
+                "vertical": dset["height"].isel(along_track=pr0).values,
+            },
+            attrs=dset[var].attrs,
+        )
 
     return result
-
-
-def plot_results(dset, result, pr0, prn, skip):
-    """Create visualization plots of simulation results."""
-    print("Generating plots...")
-
-    fig, ax = plt.subplots(4, 1, figsize=(8, 6), sharex=True, constrained_layout=True)
-
-    # Rain water content
-    dset["rain_water_content"].isel(
-        along_track=slice(pr0, prn, skip), JSG_height=slice(None, None)
-    ).pipe(np.log10).plot(
-        ax=ax[0],
-        x="along_track",
-        y="JSG_height",
-        cmap="viridis",
-        cbar_kwargs={"label": "log10 [kg/m3]"},
-        add_colorbar=True,
-    )
-    ax[0].invert_yaxis()
-    ax[0].set_title("Rain Water Content")
-    ax[0].set_xlabel("")
-
-    # Liquid water content
-    dset["liquid_water_content"].isel(
-        along_track=slice(pr0, prn, skip), JSG_height=slice(None, None)
-    ).pipe(np.log10).plot(
-        ax=ax[1],
-        x="along_track",
-        y="JSG_height",
-        cmap="viridis",
-        cbar_kwargs={"label": "log10 [kg/m3]"},
-        add_colorbar=True,
-    )
-    ax[1].invert_yaxis()
-    ax[1].set_title("Liquid Water Content")
-    ax[1].set_xlabel("")
-
-    # Ice water content
-    dset["ice_water_content"].isel(
-        along_track=slice(pr0, prn, skip), JSG_height=slice(None, None)
-    ).pipe(np.log10).plot(
-        ax=ax[2],
-        x="along_track",
-        y="JSG_height",
-        cmap="viridis",
-        cbar_kwargs={"label": "log10 [kg/m3]"},
-    )
-    ax[2].invert_yaxis()
-    ax[2].set_title("Ice Water Content")
-    ax[2].set_xlabel("")
-
-    # Brightness temperatures
-    dset["MSI_longwave_brightness_temperature"].isel(
-        along_track=slice(pr0, prn, skip), MSI_longwave_channel=1
-    ).plot(ax=ax[3], marker="x", alpha=0.7, ls="-", color="black", label="MSI 10.8um")
-    result["ARTS_MSI_brightness_temperature"].plot(
-        ax=ax[3], hue="frequency_ir", marker="x", alpha=0.7, ls="-", label="ARTS 10.8um"
-    )
-    result["ARTS_AWS_brightness_temperature"].plot(
-        ax=ax[3], hue="frequency_aws", marker="o", alpha=0.7, ls="-", label="ARTS AWS"
-    )
-    ax[3].set_title("Brightness Temperatures")
-    ax[3].set_xlabel("Along Track Index")
-    ax[3].set_ylabel("Brightness Temperature (K)")
-    handles, _ = ax[3].get_legend_handles_labels()
-    new_labels = ["MSI 10.8 um", "ARTS 10.8 um"]
-    for freq in result.frequency_aws.values:
-        new_labels.append(f"ARTS {freq/1e9:.1f} GHz")
-    ax[3].legend(handles, new_labels, loc="upper right")
-    plt.show()
 
 
 # %%
@@ -524,8 +533,9 @@ def main(
 
     print("=" * 70)
 
-    # % Load data
-    dset, ds_xmet, dset_fmr = load_data(orbit, frame)
+ 
+    # %% Load data
+    dset = search_and_load_data(orbit, frame)
     if pr0 is None:
         pr0 = 0
     if prn is None:
@@ -533,10 +543,10 @@ def main(
     if skip is None:
         skip = 1
 
-    # % Initialize workspace
+    # %% Initialize workspace
     ws = init_workspace()
 
-    # % Setup and run IR simulation
+    # %% Setup and run IR simulation
     setup_workspace_ir_abs(ws)
 
     if isinstance(ice_habit_ir, str):
@@ -545,11 +555,11 @@ def main(
     for habit in ice_habit_ir:
         print(f"IR ice habit: {habit}")
         pmodels_ir = get_default_pmodels_ir(ice_habit=habit)
-        result_ir_habit = setup_ir(ws, dset, pmodels_ir, pr0, prn, skip)
+        result_ir_habit = simulate_ir(ws, dset, pmodels_ir, pr0, prn, skip)
         result_ir.append(result_ir_habit)
     result_ir = xr.concat(result_ir, dim="habit_ir")
 
-    # % Setup and run AWS simulation
+    # %% Setup and run AWS simulation
     setup_workspace_aws(ws)
 
     if isinstance(ice_habit_aws, str):
@@ -558,24 +568,22 @@ def main(
     for habit in ice_habit_aws:
         print(f"AWS ice habit: {habit}")
         pmodels_aws = get_default_pmodels_aws(ice_habit=habit)
-        result_aws_habit = setup_aws(ws, dset, pmodels_aws, pr0, prn, skip)
+        result_aws_habit = simulate_aws(ws, dset, pmodels_aws, pr0, prn, skip)
         result_aws.append(result_aws_habit)
     result_aws = xr.concat(result_aws, dim="habit_mw")
 
-    # % Merge results
+    # %% Merge results
     result = merge_results(
-        result_ir, result_aws, dset, ds_xmet, dset_fmr, orbit, frame, pr0, prn, skip
+        result_ir, result_aws, dset, orbit, frame, pr0, prn, skip
     )
 
-    # % Save if output file specified
+    # %% Save if output file specified
     if output:
         print(f"Saving results...")
         result.to_netcdf(output)
         print(f"Results saved to {output}")
 
-    # %Plot if requested
-    if plot:
-        plot_results(dset, result, pr0, prn, skip)
+    # %%
 
     print("=" * 70)
     print("Simulation completed successfully!")
